@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import cv2
 import numpy as np
@@ -8,18 +8,86 @@ import base64
 app = Flask(__name__)
 CORS(app)
 
+# =====================================================
+# OMR TEMPLATE CONFIGURATION
+# =====================================================
+class OMRTemplate:
+    # Paper dimensions
+    PAPER_WIDTH = 345.12
+    PAPER_HEIGHT = 511.20
+    
+    # Bubble specifications
+    BUBBLE_WIDTH = 11.60
+    BUBBLE_THRESHOLD = 0.35  # 35% fill threshold (adjustable for sensitivity)
+    
+    # Roll Number section (6 digits, 10 rows each: 0-9)
+    ROLL_START_X = 27.19
+    ROLL_START_Y = 58.77
+    ROLL_VERTICAL_SPACING = 18.33
+    ROLL_HORIZONTAL_SPACING = 19.36
+    ROLL_DIGITS = 6
+    ROLL_OPTIONS = 10  # 0-9
+    
+    # Set Code section (A, B, C, D)
+    SET_START_X = 143.68
+    SET_START_Y = 58.77
+    SET_SPACING = 18.33
+    SET_OPTIONS = ['A', 'B', 'C', 'D']
+    
+    # Questions section
+    Q_START_X = 173.02
+    Q_START_Y = 40.18
+    Q_OPTION_SPACING = 19.19
+    Q_VERTICAL_SPACING = 18.53
+    Q_TOTAL = 50
+    Q_OPTIONS = ['A', 'B', 'C', 'D']
+
+def check_bubble_filled(img_gray, x, y, bubble_size, threshold):
+    """Check if a bubble at (x, y) is filled beyond threshold"""
+    try:
+        half_size = int(bubble_size / 2)
+        x_int, y_int = int(x), int(y)
+        
+        # Extract ROI
+        roi = img_gray[max(0, y_int-half_size):min(img_gray.shape[0], y_int+half_size),
+                       max(0, x_int-half_size):min(img_gray.shape[1], x_int+half_size)]
+        
+        if roi.size == 0:
+            return False, 0.0
+        
+        # Invert for dark detection
+        inverted = cv2.bitwise_not(roi)
+        
+        # Calculate fill percentage
+        total_pixels = roi.shape[0] * roi.shape[1]
+        dark_pixels = np.sum(inverted > 128)
+        fill_percentage = dark_pixels / total_pixels if total_pixels > 0 else 0
+        
+        is_filled = fill_percentage > threshold
+        return is_filled, fill_percentage
+        
+    except Exception as e:
+        return False, 0.0
+
+def scale_coordinates(template_coord, img_width, img_height):
+    """Scale template coordinates to actual image size"""
+    scale_x = img_width / OMRTemplate.PAPER_WIDTH
+    scale_y = img_height / OMRTemplate.PAPER_HEIGHT
+    return template_coord[0] * scale_x, template_coord[1] * scale_y
+
 @app.route('/')
 def home():
     return '''
     <div style="text-align:center; font-family:Arial; padding:50px;">
         <h1>🎯 OMR API is Running!</h1>
-        <p>For medical students - OMR sheet checker</p>
+        <p>Medical Student OMR Sheet Checker - v2.0</p>
+        <p style="color:#666;">Template-based accurate detection</p>
     </div>
     '''
 
 @app.route('/test')
 def test():
-    return jsonify({'status': 'ok', 'message': 'API working!'})
+    return jsonify({'status': 'ok', 'message': 'OMR API v2.0 working!'})
 
 @app.route('/process-omr', methods=['POST'])
 def process_omr():
@@ -31,115 +99,176 @@ def process_omr():
         filepath = f'/tmp/{file.filename}'
         file.save(filepath)
         
-        # Read and process image
+        # Read image
         img = cv2.imread(filepath)
         if img is None:
-            return jsonify({'error': 'Cannot read image'}), 400
+            return jsonify({'error': 'Cannot read image file'}), 400
         
+        img_height, img_width = img.shape[:2]
         result_img = img.copy()
         
-        # Convert to grayscale and threshold
+        # Convert to grayscale
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         
-        # Find contours (bubbles)
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Get threshold value (adjustable)
+        threshold = float(request.form.get('threshold', OMRTemplate.BUBBLE_THRESHOLD))
         
-        bubbles = []
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if 200 < area < 2000:
-                (x, y, w, h) = cv2.boundingRect(cnt)
-                aspect_ratio = w / float(h)
+        # ==========================================
+        # DETECT ROLL NUMBER (6 digits)
+        # ==========================================
+        roll_number = ""
+        roll_detections = []
+        
+        for digit_col in range(OMRTemplate.ROLL_DIGITS):
+            detected_digit = None
+            max_fill = 0
+            
+            for row in range(OMRTemplate.ROLL_OPTIONS):
+                # Calculate bubble position
+                template_x = OMRTemplate.ROLL_START_X + (digit_col * OMRTemplate.ROLL_HORIZONTAL_SPACING)
+                template_y = OMRTemplate.ROLL_START_Y + (row * OMRTemplate.ROLL_VERTICAL_SPACING)
                 
-                if 0.75 < aspect_ratio < 1.25:
-                    # Measure darkness (how filled the bubble is)
-                    roi = thresh[y:y+h, x:x+w]
-                    filled_pixels = cv2.countNonZero(roi)
-                    total_pixels = w * h
-                    fill_percentage = filled_pixels / total_pixels if total_pixels > 0 else 0
+                # Scale to actual image
+                actual_x, actual_y = scale_coordinates((template_x, template_y), img_width, img_height)
+                bubble_size = OMRTemplate.BUBBLE_WIDTH * (img_width / OMRTemplate.PAPER_WIDTH)
+                
+                # Check if filled
+                is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_size, threshold)
+                
+                if is_filled and fill_pct > max_fill:
+                    max_fill = fill_pct
+                    detected_digit = str(row)
                     
-                    bubbles.append({
-                        'x': x,
-                        'y': y,
-                        'w': w,
-                        'h': h,
-                        'center_x': x + w // 2,
-                        'center_y': y + h // 2,
-                        'fill': fill_percentage
+                    roll_detections.append({
+                        'digit_position': digit_col + 1,
+                        'value': detected_digit,
+                        'x': int(actual_x),
+                        'y': int(actual_y),
+                        'confidence': round(fill_pct * 100, 1)
                     })
+            
+            if detected_digit is not None:
+                roll_number += detected_digit
+                # Mark with GREEN
+                last_detection = roll_detections[-1]
+                cv2.circle(result_img, (last_detection['x'], last_detection['y']), 
+                          int(bubble_size/2 + 2), (0, 255, 0), 2)
         
-        # Sort bubbles by Y position (top to bottom)
-        bubbles.sort(key=lambda b: b['center_y'])
+        # ==========================================
+        # DETECT SET CODE (A, B, C, D)
+        # ==========================================
+        set_code = None
+        set_detection = None
+        max_fill = 0
         
-        # Group into rows (questions)
-        rows = []
-        current_row = []
-        last_y = -1000
+        for idx, option in enumerate(OMRTemplate.SET_OPTIONS):
+            template_x = OMRTemplate.SET_START_X + (idx * OMRTemplate.SET_SPACING)
+            template_y = OMRTemplate.SET_START_Y
+            
+            actual_x, actual_y = scale_coordinates((template_x, template_y), img_width, img_height)
+            bubble_size = OMRTemplate.BUBBLE_WIDTH * (img_width / OMRTemplate.PAPER_WIDTH)
+            
+            is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_size, threshold)
+            
+            if is_filled and fill_pct > max_fill:
+                max_fill = fill_pct
+                set_code = option
+                set_detection = {
+                    'set': set_code,
+                    'x': int(actual_x),
+                    'y': int(actual_y),
+                    'confidence': round(fill_pct * 100, 1)
+                }
         
-        for b in bubbles:
-            if abs(b['center_y'] - last_y) < 35:
-                current_row.append(b)
-            else:
-                if current_row:
-                    rows.append(sorted(current_row, key=lambda x: x['center_x']))
-                current_row = [b]
-                last_y = b['center_y']
+        if set_detection:
+            cv2.circle(result_img, (set_detection['x'], set_detection['y']), 
+                      int(bubble_size/2 + 2), (0, 255, 0), 2)
         
-        if current_row:
-            rows.append(sorted(current_row, key=lambda x: x['center_x']))
-        
-        # Extract answers (find darkest bubble in each row)
+        # ==========================================
+        # DETECT ANSWERS (Questions 1-50)
+        # ==========================================
         answers = []
-        options = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
         
-        for q_num, row in enumerate(rows, 1):
-            if len(row) >= 2:
-                # Find the DARKEST (most filled) bubble
-                darkest_idx = max(range(len(row)), key=lambda i: row[i]['fill'])
-                darkest_fill = row[darkest_idx]['fill']
+        for q_num in range(1, OMRTemplate.Q_TOTAL + 1):
+            detected_option = None
+            max_fill = 0
+            question_bubbles = []
+            
+            for opt_idx, option in enumerate(OMRTemplate.Q_OPTIONS):
+                # Calculate position
+                template_x = OMRTemplate.Q_START_X + (opt_idx * OMRTemplate.Q_OPTION_SPACING)
+                template_y = OMRTemplate.Q_START_Y + ((q_num - 1) * OMRTemplate.Q_VERTICAL_SPACING)
                 
-                # Only consider as marked if > 30% filled
-                if darkest_fill > 0.30:
-                    answer_letter = options[darkest_idx] if darkest_idx < len(options) else '?'
-                    answers.append({
-                        'question': q_num,
-                        'answer': answer_letter,
-                        'confidence': round(darkest_fill * 100, 1)
-                    })
-                    
-                    # Draw GREEN circle on filled bubble
-                    bubble = row[darkest_idx]
-                    cv2.circle(result_img, 
-                              (bubble['center_x'], bubble['center_y']), 
-                              max(bubble['w'], bubble['h']) // 2 + 3, 
-                              (0, 255, 0), 3)
-                else:
-                    # Draw RED circles on unfilled bubbles
-                    for bubble in row:
-                        cv2.circle(result_img, 
-                                  (bubble['center_x'], bubble['center_y']), 
-                                  max(bubble['w'], bubble['h']) // 2 + 3, 
-                                  (0, 0, 255), 2)
+                actual_x, actual_y = scale_coordinates((template_x, template_y), img_width, img_height)
+                bubble_size = OMRTemplate.BUBBLE_WIDTH * (img_width / OMRTemplate.PAPER_WIDTH)
+                
+                is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_size, threshold)
+                
+                question_bubbles.append({
+                    'option': option,
+                    'x': int(actual_x),
+                    'y': int(actual_y),
+                    'filled': is_filled,
+                    'fill_pct': fill_pct
+                })
+                
+                if is_filled and fill_pct > max_fill:
+                    max_fill = fill_pct
+                    detected_option = option
+            
+            # Mark bubbles
+            if detected_option:
+                # Mark detected answer as GREEN
+                for bubble in question_bubbles:
+                    if bubble['option'] == detected_option:
+                        cv2.circle(result_img, (bubble['x'], bubble['y']), 
+                                  int(bubble_size/2 + 2), (0, 255, 0), 2)
+                        answers.append({
+                            'question': q_num,
+                            'answer': detected_option,
+                            'confidence': round(bubble['fill_pct'] * 100, 1),
+                            'status': 'marked'
+                        })
+                    else:
+                        # Mark other options as RED
+                        cv2.circle(result_img, (bubble['x'], bubble['y']), 
+                                  int(bubble_size/2 + 1), (0, 0, 255), 1)
+            else:
+                # No answer detected - mark all RED
+                for bubble in question_bubbles:
+                    cv2.circle(result_img, (bubble['x'], bubble['y']), 
+                              int(bubble_size/2 + 1), (0, 0, 255), 1)
+                answers.append({
+                    'question': q_num,
+                    'answer': None,
+                    'confidence': 0,
+                    'status': 'not_marked'
+                })
         
         # Convert result image to base64
-        _, buffer = cv2.imencode('.jpg', result_img)
+        _, buffer = cv2.imencode('.jpg', result_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
         img_base64 = base64.b64encode(buffer).decode('utf-8')
         
         # Cleanup
         os.remove(filepath)
         
+        # Prepare response
         return jsonify({
             'success': True,
-            'total_bubbles': len(bubbles),
-            'total_questions': len(rows),
+            'roll_number': roll_number if roll_number else None,
+            'roll_detections': roll_detections,
+            'set_code': set_code,
+            'set_detection': set_detection,
+            'total_questions': OMRTemplate.Q_TOTAL,
+            'answers_marked': len([a for a in answers if a['status'] == 'marked']),
+            'answers_not_marked': len([a for a in answers if a['status'] == 'not_marked']),
             'answers': answers,
+            'threshold_used': threshold,
             'result_image': f'data:image/jpeg;base64,{img_base64}'
         })
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': str(e), 'trace': str(e.__traceback__)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
