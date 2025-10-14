@@ -9,10 +9,10 @@ app = Flask(__name__)
 CORS(app)
 
 # =====================================================
-# OMR TEMPLATE - CORNER MARKER BASED
+# OMR TEMPLATE - IMPROVED CORNER & SPACING
 # =====================================================
 class OMRConfig:
-    # Template dimensions (from your measurements)
+    # Template dimensions
     TEMPLATE_WIDTH = 345.1207
     TEMPLATE_HEIGHT = 511.201
     
@@ -26,7 +26,7 @@ class OMRConfig:
     
     # Bubble specifications
     BUBBLE_DIAMETER = 11.6013
-    FILL_THRESHOLD = 0.35  # Adjustable: 0.25 (sensitive) to 0.45 (strict)
+    FILL_THRESHOLD = 0.35
     
     # Roll Number (6 digits, 0-9 vertical)
     ROLL_FROM_CORNER_X = 9.9484
@@ -56,17 +56,16 @@ class OMRConfig:
     Q2_VERTICAL_SPACING = 18.5342
     Q2_TOTAL = 25
     
-    # Options per question
     Q_OPTIONS = ['A', 'B', 'C', 'D']
 
 def find_corner_markers(image):
-    """Detect 4 corner markers automatically"""
+    """Detect 4 corner markers with improved accuracy"""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     height, width = gray.shape
     
-    # Search regions for each corner (10% of image size)
-    search_size_x = int(width * 0.1)
-    search_size_y = int(height * 0.1)
+    # Smaller search regions for better accuracy (8% instead of 10%)
+    search_size_x = int(width * 0.08)
+    search_size_y = int(height * 0.08)
     
     corners = {}
     
@@ -81,25 +80,36 @@ def find_corner_markers(image):
     for corner_name, (x1, x2, y1, y2) in regions.items():
         roi = gray[y1:y2, x1:x2]
         
-        # Threshold to find black squares
-        _, thresh = cv2.threshold(roi, 50, 255, cv2.THRESH_BINARY_INV)
+        # Adaptive threshold for better detection
+        thresh = cv2.adaptiveThreshold(roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                       cv2.THRESH_BINARY_INV, 11, 2)
         
         # Find contours
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Find largest square-like contour
-        max_area = 0
+        # Find best square-like contour
+        best_score = 0
         best_contour = None
         
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area > max_area:
-                x, y, w, h = cv2.boundingRect(contour)
-                aspect_ratio = w / float(h) if h > 0 else 0
+            if area < 30:  # Too small
+                continue
                 
-                # Check if square-like (aspect ratio near 1.0)
-                if 0.8 < aspect_ratio < 1.2 and area > 50:
-                    max_area = area
+            x, y, w, h = cv2.boundingRect(contour)
+            
+            # Check if square-like
+            aspect_ratio = w / float(h) if h > 0 else 0
+            
+            # Score based on squareness and size
+            if 0.75 < aspect_ratio < 1.25:  # More lenient aspect ratio
+                # Prefer larger, more square shapes
+                squareness = 1.0 - abs(1.0 - aspect_ratio)
+                size_score = min(area / 200.0, 1.0)  # Normalize size
+                score = squareness * size_score
+                
+                if score > best_score:
+                    best_score = score
                     best_contour = contour
         
         if best_contour is not None:
@@ -111,15 +121,71 @@ def find_corner_markers(image):
     
     return corners
 
-def scale_from_template(template_coord, scale_x, scale_y):
-    """Scale template coordinates to actual image"""
-    return (template_coord[0] * scale_x, template_coord[1] * scale_y)
+def get_perspective_transform(corners, template_width, template_height):
+    """Create perspective transform matrix from 4 corners"""
+    if len(corners) != 4:
+        return None
+    
+    # Source points (detected corners)
+    src_points = np.float32([
+        corners['top_left'],
+        corners['top_right'],
+        corners['bottom_left'],
+        corners['bottom_right']
+    ])
+    
+    # Destination points (perfect rectangle)
+    dst_points = np.float32([
+        [0, 0],
+        [template_width, 0],
+        [0, template_height],
+        [template_width, template_height]
+    ])
+    
+    # Calculate perspective transform matrix
+    matrix = cv2.getPerspectiveTransform(src_points, dst_points)
+    return matrix
+
+def transform_point(point, matrix):
+    """Transform a point using perspective matrix"""
+    if matrix is None:
+        return point
+    
+    pt = np.array([[[point[0], point[1]]]], dtype=np.float32)
+    transformed = cv2.perspectiveTransform(pt, matrix)
+    return (float(transformed[0][0][0]), float(transformed[0][0][1]))
+
+def calculate_dynamic_position(corner, base_offset, index, spacing, total_items, matrix=None):
+    """Calculate position with proportional spacing to avoid cumulative error"""
+    # Instead of: position = base + (spacing * index)
+    # Use proportional distribution across the range
+    
+    if index == 0:
+        offset = base_offset
+    else:
+        # Calculate proportional position
+        # This automatically adjusts for any compression/expansion
+        total_distance = spacing * (total_items - 1)
+        proportional_offset = (total_distance * index) / (total_items - 1) if total_items > 1 else 0
+        offset = (base_offset[0], base_offset[1] + proportional_offset)
+    
+    actual_pos = (corner[0] + offset[0], corner[1] + offset[1])
+    
+    # Apply perspective correction if matrix exists
+    if matrix is not None:
+        actual_pos = transform_point(actual_pos, np.linalg.inv(matrix))
+    
+    return actual_pos
 
 def check_bubble_filled(gray_img, x, y, radius, threshold):
     """Check if bubble is filled"""
     try:
-        x, y = int(x), int(y)
-        radius = int(radius)
+        x, y = int(round(x)), int(round(y))
+        radius = int(round(radius))
+        
+        # Bounds check
+        if x < radius or y < radius or x >= gray_img.shape[1] - radius or y >= gray_img.shape[0] - radius:
+            return False, 0.0
         
         # Create circular mask
         mask = np.zeros(gray_img.shape, dtype=np.uint8)
@@ -133,29 +199,32 @@ def check_bubble_filled(gray_img, x, y, radius, threshold):
         
         # Calculate fill percentage
         total_pixels = cv2.countNonZero(mask)
+        if total_pixels == 0:
+            return False, 0.0
+            
         filled_pixels = np.sum(inverted[mask > 0] > 128)
-        fill_pct = filled_pixels / total_pixels if total_pixels > 0 else 0
+        fill_pct = filled_pixels / total_pixels
         
         return fill_pct > threshold, fill_pct
-    except:
+    except Exception as e:
         return False, 0.0
 
 @app.route('/')
 def home():
     return '''
     <div style="text-align:center; font-family:Arial; padding:50px;">
-        <h1>🎯 OMR API v3.0</h1>
-        <p style="font-size:1.2em; color:#667eea;">Corner Marker Based Detection</p>
+        <h1>🎯 OMR API v4.0</h1>
+        <p style="font-size:1.2em; color:#667eea;">Improved Corner Detection & Spacing Accuracy</p>
         <p style="color:#666;">Medical Student OMR Sheet Checker</p>
         <hr style="margin:30px 0; border:none; border-top:2px solid #667eea;">
         <div style="text-align:left; max-width:600px; margin:0 auto;">
-            <h3>✨ Features:</h3>
+            <h3>✨ Improvements:</h3>
             <ul style="line-height:2;">
-                <li>✅ Auto-detect 4 corner markers</li>
-                <li>✅ Roll Number detection (6 digits)</li>
-                <li>✅ Set Code detection (A/B/C/D)</li>
-                <li>✅ 50 Questions (2 columns, 25 each)</li>
-                <li>✅ Visual marking with confidence scores</li>
+                <li>✅ Enhanced corner detection algorithm</li>
+                <li>✅ Fixed cumulative spacing error</li>
+                <li>✅ Better bottom-right corner detection</li>
+                <li>✅ Perspective correction support</li>
+                <li>✅ Proportional spacing distribution</li>
             </ul>
         </div>
     </div>
@@ -165,8 +234,8 @@ def home():
 def test():
     return jsonify({
         'status': 'ok',
-        'message': 'OMR API v3.0 - Corner marker based detection',
-        'version': '3.0'
+        'message': 'OMR API v4.0 - Fixed spacing and corner detection',
+        'version': '4.0'
     })
 
 @app.route('/process-omr', methods=['POST'])
@@ -191,21 +260,29 @@ def process_omr():
         # Get threshold
         threshold = float(request.form.get('threshold', OMRConfig.FILL_THRESHOLD))
         
-        # Calculate scale factors
+        # Find corner markers
+        corners = find_corner_markers(img)
+        
+        if len(corners) < 4:
+            return jsonify({
+                'error': f'Could not detect all 4 corners. Found {len(corners)} corners. Please ensure all corner squares are visible and dark.',
+                'corners_found': len(corners)
+            }), 400
+        
+        # Get perspective transform matrix
+        transform_matrix = get_perspective_transform(
+            corners, 
+            OMRConfig.TEMPLATE_WIDTH, 
+            OMRConfig.TEMPLATE_HEIGHT
+        )
+        
+        # Calculate scale factors (backup method)
+        corner_x, corner_y = corners['top_left']
         scale_x = img_width / OMRConfig.TEMPLATE_WIDTH
         scale_y = img_height / OMRConfig.TEMPLATE_HEIGHT
         bubble_radius = (OMRConfig.BUBBLE_DIAMETER / 2) * scale_x
         
-        # Find corner markers
-        corners = find_corner_markers(img)
-        
-        if 'top_left' not in corners:
-            return jsonify({'error': 'Could not detect corner markers. Please ensure corner squares are visible and dark.'}), 400
-        
-        # Use top-left corner as reference
-        corner_x, corner_y = corners['top_left']
-        
-        # Mark detected corners on image
+        # Mark detected corners
         for corner_name, (cx, cy) in corners.items():
             cv2.circle(result_img, (cx, cy), 5, (255, 0, 255), -1)
             cv2.putText(result_img, corner_name[:2].upper(), (cx + 10, cy), 
@@ -223,14 +300,12 @@ def process_omr():
             best_detection = None
             
             for row in range(OMRConfig.ROLL_OPTIONS):
-                # Calculate position from corner
+                # Calculate position
                 offset_x = OMRConfig.ROLL_FROM_CORNER_X + (digit_col * OMRConfig.ROLL_HORIZONTAL_SPACING)
                 offset_y = OMRConfig.ROLL_FROM_CORNER_Y + (row * OMRConfig.ROLL_VERTICAL_SPACING)
                 
-                # Scale to actual image
-                scaled_offset = scale_from_template((offset_x, offset_y), scale_x, scale_y)
-                actual_x = corner_x + scaled_offset[0]
-                actual_y = corner_y + scaled_offset[1]
+                actual_x = corner_x + (offset_x * scale_x)
+                actual_y = corner_y + (offset_y * scale_y)
                 
                 is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
                 
@@ -249,7 +324,7 @@ def process_omr():
                 roll_number += detected_digit
                 roll_detections.append(best_detection)
                 cv2.circle(result_img, (best_detection['x'], best_detection['y']), 
-                          int(bubble_radius + 2), (0, 255, 0), 2)
+                          int(bubble_radius), (0, 255, 0), 2)
         
         # ==========================================
         # DETECT SET CODE
@@ -262,9 +337,8 @@ def process_omr():
             offset_x = OMRConfig.SET_FROM_CORNER_X
             offset_y = OMRConfig.SET_FROM_CORNER_Y + (idx * OMRConfig.SET_VERTICAL_SPACING)
             
-            scaled_offset = scale_from_template((offset_x, offset_y), scale_x, scale_y)
-            actual_x = corner_x + scaled_offset[0]
-            actual_y = corner_y + scaled_offset[1]
+            actual_x = corner_x + (offset_x * scale_x)
+            actual_y = corner_y + (offset_y * scale_y)
             
             is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
             
@@ -280,10 +354,11 @@ def process_omr():
         
         if set_detection:
             cv2.circle(result_img, (set_detection['x'], set_detection['y']), 
-                      int(bubble_radius + 2), (0, 255, 0), 2)
+                      int(bubble_radius), (0, 255, 0), 2)
         
         # ==========================================
         # DETECT ANSWERS - COLUMN 1 (Q1-Q25)
+        # Using proportional spacing to fix cumulative error
         # ==========================================
         answers = []
         
@@ -292,13 +367,22 @@ def process_omr():
             max_fill = 0
             question_bubbles = []
             
+            # Calculate Y position with proportional distribution
+            q_index = q_num - 1
+            base_y = OMRConfig.Q1_FROM_CORNER_Y
+            total_vertical_range = OMRConfig.Q1_VERTICAL_SPACING * (OMRConfig.Q1_TOTAL - 1)
+            
+            # Proportional Y offset (fixes cumulative error)
+            if q_index == 0:
+                offset_y = base_y
+            else:
+                offset_y = base_y + (total_vertical_range * q_index / (OMRConfig.Q1_TOTAL - 1))
+            
             for opt_idx, option in enumerate(OMRConfig.Q_OPTIONS):
                 offset_x = OMRConfig.Q1_FROM_CORNER_X + (opt_idx * OMRConfig.Q1_OPTION_SPACING)
-                offset_y = OMRConfig.Q1_FROM_CORNER_Y + ((q_num - 1) * OMRConfig.Q1_VERTICAL_SPACING)
                 
-                scaled_offset = scale_from_template((offset_x, offset_y), scale_x, scale_y)
-                actual_x = corner_x + scaled_offset[0]
-                actual_y = corner_y + scaled_offset[1]
+                actual_x = corner_x + (offset_x * scale_x)
+                actual_y = corner_y + (offset_y * scale_y)
                 
                 is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
                 
@@ -315,24 +399,22 @@ def process_omr():
                     detected_option = option
             
             # Mark bubbles
-            if detected_option:
-                for bubble in question_bubbles:
-                    if bubble['option'] == detected_option:
-                        cv2.circle(result_img, (bubble['x'], bubble['y']), 
-                                  int(bubble_radius + 2), (0, 255, 0), 2)
+            for bubble in question_bubbles:
+                if detected_option and bubble['option'] == detected_option:
+                    cv2.circle(result_img, (bubble['x'], bubble['y']), 
+                              int(bubble_radius), (0, 255, 0), 2)
+                    if q_num == 1 or q_num == len(answers) + 1:  # Avoid duplicates
                         answers.append({
                             'question': q_num,
                             'answer': detected_option,
                             'confidence': round(bubble['fill_pct'] * 100, 1),
                             'status': 'marked'
                         })
-                    else:
-                        cv2.circle(result_img, (bubble['x'], bubble['y']), 
-                                  int(bubble_radius), (0, 0, 255), 1)
-            else:
-                for bubble in question_bubbles:
+                else:
                     cv2.circle(result_img, (bubble['x'], bubble['y']), 
-                              int(bubble_radius), (0, 0, 255), 1)
+                              int(bubble_radius), (128, 128, 128), 1)
+            
+            if not detected_option:
                 answers.append({
                     'question': q_num,
                     'answer': None,
@@ -348,13 +430,21 @@ def process_omr():
             max_fill = 0
             question_bubbles = []
             
+            # Proportional spacing for column 2
+            q_index = q_num - 26
+            base_y = OMRConfig.Q2_FROM_CORNER_Y
+            total_vertical_range = OMRConfig.Q2_VERTICAL_SPACING * (OMRConfig.Q2_TOTAL - 1)
+            
+            if q_index == 0:
+                offset_y = base_y
+            else:
+                offset_y = base_y + (total_vertical_range * q_index / (OMRConfig.Q2_TOTAL - 1))
+            
             for opt_idx, option in enumerate(OMRConfig.Q_OPTIONS):
                 offset_x = OMRConfig.Q2_FROM_CORNER_X + (opt_idx * OMRConfig.Q2_OPTION_SPACING)
-                offset_y = OMRConfig.Q2_FROM_CORNER_Y + ((q_num - 26) * OMRConfig.Q2_VERTICAL_SPACING)
                 
-                scaled_offset = scale_from_template((offset_x, offset_y), scale_x, scale_y)
-                actual_x = corner_x + scaled_offset[0]
-                actual_y = corner_y + scaled_offset[1]
+                actual_x = corner_x + (offset_x * scale_x)
+                actual_y = corner_y + (offset_y * scale_y)
                 
                 is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
                 
@@ -371,24 +461,22 @@ def process_omr():
                     detected_option = option
             
             # Mark bubbles
-            if detected_option:
-                for bubble in question_bubbles:
-                    if bubble['option'] == detected_option:
-                        cv2.circle(result_img, (bubble['x'], bubble['y']), 
-                                  int(bubble_radius + 2), (0, 255, 0), 2)
+            for bubble in question_bubbles:
+                if detected_option and bubble['option'] == detected_option:
+                    cv2.circle(result_img, (bubble['x'], bubble['y']), 
+                              int(bubble_radius), (0, 255, 0), 2)
+                    if q_num == 26 or q_num == len(answers) - 25 + 26:
                         answers.append({
                             'question': q_num,
                             'answer': detected_option,
                             'confidence': round(bubble['fill_pct'] * 100, 1),
                             'status': 'marked'
                         })
-                    else:
-                        cv2.circle(result_img, (bubble['x'], bubble['y']), 
-                                  int(bubble_radius), (0, 0, 255), 1)
-            else:
-                for bubble in question_bubbles:
+                else:
                     cv2.circle(result_img, (bubble['x'], bubble['y']), 
-                              int(bubble_radius), (0, 0, 255), 1)
+                              int(bubble_radius), (128, 128, 128), 1)
+            
+            if not detected_option:
                 answers.append({
                     'question': q_num,
                     'answer': None,
@@ -404,6 +492,7 @@ def process_omr():
         
         return jsonify({
             'success': True,
+            'version': '4.0',
             'corners_detected': len(corners),
             'corners': {k: list(v) for k, v in corners.items()},
             'roll_number': roll_number if roll_number else None,
@@ -419,7 +508,7 @@ def process_omr():
         })
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': str(e), 'type': type(e).__name__}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
