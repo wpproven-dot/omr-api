@@ -9,7 +9,7 @@ app = Flask(__name__)
 CORS(app)
 
 # =====================================================
-# OMR TEMPLATE - CORNER MARKER BASED WITH PERSPECTIVE CORRECTION
+# OMR TEMPLATE - ADAPTIVE CORNER DETECTION
 # =====================================================
 class OMRConfig:
     # Template dimensions (from your measurements)
@@ -19,10 +19,6 @@ class OMRConfig:
     # Corner square specifications
     CORNER_SQUARE_WIDTH = 9.951
     CORNER_SQUARE_HEIGHT = 9.6884
-    
-    # Verification distances
-    CORNER_HORIZONTAL_DIST = 311.5073
-    CORNER_VERTICAL_DIST = 466.7873
     
     # Bubble specifications
     BUBBLE_DIAMETER = 11.6013
@@ -59,23 +55,32 @@ class OMRConfig:
     # Options per question
     Q_OPTIONS = ['A', 'B', 'C', 'D']
 
-def find_corner_markers_improved(image):
-    """Detect 4 corner markers with improved filtering"""
+def find_corner_markers_adaptive(image):
+    """Adaptive corner detection - tries multiple methods"""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     height, width = gray.shape
     
-    # Expected corner size in pixels (approximate, will vary with scan resolution)
-    expected_area_min = 50
-    expected_area_max = 500
+    # Method 1: Strict detection (good for high quality scans)
+    corners = find_corners_strict(gray, width, height)
+    if len(corners) == 4:
+        return corners, "strict"
     
-    # Search regions for each corner (8% of image size)
+    # Method 2: Relaxed detection (for varied quality)
+    corners = find_corners_relaxed(gray, width, height)
+    if len(corners) == 4:
+        return corners, "relaxed"
+    
+    # Method 3: Simple detection (fallback)
+    corners = find_corners_simple(gray, width, height)
+    return corners, "simple"
+
+def find_corners_strict(gray, width, height):
+    """Strict corner detection with tight filtering"""
     search_pct = 0.08
     search_size_x = int(width * search_pct)
     search_size_y = int(height * search_pct)
     
     corners = {}
-    
-    # Define search regions
     regions = {
         'top_left': (0, search_size_x, 0, search_size_y),
         'top_right': (width - search_size_x, width, 0, search_size_y),
@@ -86,49 +91,38 @@ def find_corner_markers_improved(image):
     for corner_name, (x1, x2, y1, y2) in regions.items():
         roi = gray[y1:y2, x1:x2]
         
-        # Adaptive threshold for better contrast
+        # Adaptive threshold
         thresh = cv2.adaptiveThreshold(roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
                                        cv2.THRESH_BINARY_INV, 11, 2)
         
-        # Find contours
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Find best square-like contour
         best_score = 0
         best_contour = None
         
         for contour in contours:
             area = cv2.contourArea(contour)
-            
-            # Filter by area
-            if area < expected_area_min or area > expected_area_max:
+            if area < 50 or area > 800:
                 continue
             
-            # Get bounding box
             x, y, w, h = cv2.boundingRect(contour)
-            
-            # Check aspect ratio (should be close to 1.0 for squares)
             aspect_ratio = w / float(h) if h > 0 else 0
+            
             if aspect_ratio < 0.7 or aspect_ratio > 1.3:
                 continue
             
-            # Check how well it fits a square (using contour approximation)
             perimeter = cv2.arcLength(contour, True)
             approx = cv2.approxPolyDP(contour, 0.04 * perimeter, True)
             
-            # Squares should have 4 corners
             if len(approx) < 4 or len(approx) > 6:
                 continue
             
-            # Check fill ratio (contour area vs bounding box area)
             bbox_area = w * h
             fill_ratio = area / bbox_area if bbox_area > 0 else 0
             
-            # Good squares have fill ratio close to 1.0
-            if fill_ratio < 0.7:
+            if fill_ratio < 0.65:
                 continue
             
-            # Calculate score (prefer squares with good aspect ratio and fill)
             score = fill_ratio * (1.0 - abs(1.0 - aspect_ratio))
             
             if score > best_score:
@@ -142,26 +136,107 @@ def find_corner_markers_improved(image):
                 cy = int(M["m01"] / M["m00"]) + y1
                 corners[corner_name] = (cx, cy)
     
-    # Validate corners
-    if len(corners) == 4:
-        # Check distances between corners
-        tl = np.array(corners['top_left'])
-        tr = np.array(corners['top_right'])
-        bl = np.array(corners['bottom_left'])
-        br = np.array(corners['bottom_right'])
+    return corners
+
+def find_corners_relaxed(gray, width, height):
+    """Relaxed corner detection with looser filtering"""
+    search_pct = 0.10
+    search_size_x = int(width * search_pct)
+    search_size_y = int(height * search_pct)
+    
+    corners = {}
+    regions = {
+        'top_left': (0, search_size_x, 0, search_size_y),
+        'top_right': (width - search_size_x, width, 0, search_size_y),
+        'bottom_left': (0, search_size_x, height - search_size_y, height),
+        'bottom_right': (width - search_size_x, width, height - search_size_y, height)
+    }
+    
+    for corner_name, (x1, x2, y1, y2) in regions.items():
+        roi = gray[y1:y2, x1:x2]
         
-        # Calculate distances
-        top_width = np.linalg.norm(tr - tl)
-        bottom_width = np.linalg.norm(br - bl)
-        left_height = np.linalg.norm(bl - tl)
-        right_height = np.linalg.norm(br - tr)
+        # Binary threshold
+        _, thresh = cv2.threshold(roi, 100, 255, cv2.THRESH_BINARY_INV)
         
-        # Widths should be similar, heights should be similar
-        width_ratio = min(top_width, bottom_width) / max(top_width, bottom_width)
-        height_ratio = min(left_height, right_height) / max(left_height, right_height)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        if width_ratio < 0.8 or height_ratio < 0.8:
-            return {}  # Invalid corners
+        best_score = 0
+        best_contour = None
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < 40 or area > 1000:
+                continue
+            
+            x, y, w, h = cv2.boundingRect(contour)
+            aspect_ratio = w / float(h) if h > 0 else 0
+            
+            if aspect_ratio < 0.6 or aspect_ratio > 1.5:
+                continue
+            
+            bbox_area = w * h
+            fill_ratio = area / bbox_area if bbox_area > 0 else 0
+            
+            if fill_ratio < 0.5:
+                continue
+            
+            score = area * fill_ratio
+            
+            if score > best_score:
+                best_score = score
+                best_contour = contour
+        
+        if best_contour is not None:
+            M = cv2.moments(best_contour)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"]) + x1
+                cy = int(M["m01"] / M["m00"]) + y1
+                corners[corner_name] = (cx, cy)
+    
+    return corners
+
+def find_corners_simple(gray, width, height):
+    """Simple corner detection - finds darkest regions"""
+    search_pct = 0.12
+    search_size_x = int(width * search_pct)
+    search_size_y = int(height * search_pct)
+    
+    corners = {}
+    regions = {
+        'top_left': (0, search_size_x, 0, search_size_y),
+        'top_right': (width - search_size_x, width, 0, search_size_y),
+        'bottom_left': (0, search_size_x, height - search_size_y, height),
+        'bottom_right': (width - search_size_x, width, height - search_size_y, height)
+    }
+    
+    for corner_name, (x1, x2, y1, y2) in regions.items():
+        roi = gray[y1:y2, x1:x2]
+        
+        # Find darkest region
+        _, thresh = cv2.threshold(roi, 80, 255, cv2.THRESH_BINARY_INV)
+        
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        max_area = 0
+        best_contour = None
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area > 30 and area > max_area:
+                x, y, w, h = cv2.boundingRect(contour)
+                aspect_ratio = w / float(h) if h > 0 else 0
+                
+                # Very loose aspect ratio check
+                if 0.5 < aspect_ratio < 2.0:
+                    max_area = area
+                    best_contour = contour
+        
+        if best_contour is not None:
+            M = cv2.moments(best_contour)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"]) + x1
+                cy = int(M["m01"] / M["m00"]) + y1
+                corners[corner_name] = (cx, cy)
     
     return corners
 
@@ -170,7 +245,6 @@ def perspective_transform(image, corners):
     if len(corners) != 4:
         return None, None
     
-    # Source points (detected corners)
     src_points = np.float32([
         corners['top_left'],
         corners['top_right'],
@@ -178,7 +252,6 @@ def perspective_transform(image, corners):
         corners['bottom_left']
     ])
     
-    # Destination points (perfect rectangle matching template)
     dst_width = int(OMRConfig.TEMPLATE_WIDTH)
     dst_height = int(OMRConfig.TEMPLATE_HEIGHT)
     
@@ -189,10 +262,7 @@ def perspective_transform(image, corners):
         [0, dst_height]
     ])
     
-    # Calculate perspective transform matrix
     matrix = cv2.getPerspectiveTransform(src_points, dst_points)
-    
-    # Apply transformation
     warped = cv2.warpPerspective(image, matrix, (dst_width, dst_height))
     
     return warped, matrix
@@ -203,22 +273,16 @@ def check_bubble_filled(gray_img, x, y, radius, threshold):
         x, y = int(round(x)), int(round(y))
         radius = int(round(radius))
         
-        # Ensure coordinates are within image bounds
         h, w = gray_img.shape
         if x < radius or y < radius or x >= w - radius or y >= h - radius:
             return False, 0.0
         
-        # Create circular mask
         mask = np.zeros(gray_img.shape, dtype=np.uint8)
         cv2.circle(mask, (x, y), radius, 255, -1)
         
-        # Extract bubble region
         roi = cv2.bitwise_and(gray_img, mask)
-        
-        # Invert (dark pixels = high values)
         inverted = cv2.bitwise_not(roi)
         
-        # Calculate fill percentage
         total_pixels = cv2.countNonZero(mask)
         filled_pixels = np.sum(inverted[mask > 0] > 128)
         fill_pct = filled_pixels / total_pixels if total_pixels > 0 else 0
@@ -231,18 +295,17 @@ def check_bubble_filled(gray_img, x, y, radius, threshold):
 def home():
     return '''
     <div style="text-align:center; font-family:Arial; padding:50px;">
-        <h1>🎯 OMR API v4.0</h1>
-        <p style="font-size:1.2em; color:#667eea;">Perspective Corrected Detection</p>
+        <h1>🎯 OMR API v4.1</h1>
+        <p style="font-size:1.2em; color:#667eea;">Adaptive Corner Detection</p>
         <p style="color:#666;">Medical Student OMR Sheet Checker</p>
         <hr style="margin:30px 0; border:none; border-top:2px solid #667eea;">
         <div style="text-align:left; max-width:600px; margin:0 auto;">
-            <h3>✨ New Features:</h3>
+            <h3>✨ Features:</h3>
             <ul style="line-height:2;">
-                <li>✅ Improved corner marker detection</li>
-                <li>✅ Perspective correction (fixes rotation/skew)</li>
-                <li>✅ Better accuracy for bottom questions</li>
-                <li>✅ Validates corner positions</li>
-                <li>✅ Roll, Set, and 50 Questions detection</li>
+                <li>✅ Adaptive corner detection (3 methods)</li>
+                <li>✅ Perspective correction</li>
+                <li>✅ Works with varied scan quality</li>
+                <li>✅ Automatic fallback detection</li>
             </ul>
         </div>
     </div>
@@ -252,8 +315,8 @@ def home():
 def test():
     return jsonify({
         'status': 'ok',
-        'message': 'OMR API v4.0 - Perspective corrected detection',
-        'version': '4.0'
+        'message': 'OMR API v4.1 - Adaptive detection',
+        'version': '4.1'
     })
 
 @app.route('/process-omr', methods=['POST'])
@@ -266,41 +329,36 @@ def process_omr():
         filepath = f'/tmp/{file.filename}'
         file.save(filepath)
         
-        # Read image
         img = cv2.imread(filepath)
         if img is None:
             return jsonify({'error': 'Cannot read image file'}), 400
         
         original_img = img.copy()
-        
-        # Get threshold
         threshold = float(request.form.get('threshold', OMRConfig.FILL_THRESHOLD))
         
-        # Find corner markers
-        corners = find_corner_markers_improved(img)
+        # Adaptive corner detection
+        corners, detection_method = find_corner_markers_adaptive(img)
         
         if len(corners) != 4:
             return jsonify({
-                'error': f'Could not detect all 4 corner markers. Found {len(corners)}/4. Please ensure all corner squares are clearly visible and dark.',
+                'error': f'Could not detect all 4 corner markers. Found {len(corners)}/4. Please ensure corner squares are visible and dark.',
                 'corners_found': len(corners),
-                'detected_corners': list(corners.keys())
+                'detected_corners': list(corners.keys()),
+                'detection_method': detection_method
             }), 400
         
-        # Apply perspective transformation
+        # Perspective transformation
         warped, transform_matrix = perspective_transform(img, corners)
         
         if warped is None:
             return jsonify({'error': 'Failed to apply perspective correction'}), 400
         
-        # Now work with the corrected image
         gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
         result_img = warped.copy()
         
-        # After perspective correction, corners are at known positions
-        corner_x, corner_y = 0, 0  # Top-left is now at origin
         bubble_radius = OMRConfig.BUBBLE_DIAMETER / 2
         
-        # Mark corrected corner positions
+        # Mark corners on corrected image
         corrected_corners = {
             'top_left': (0, 0),
             'top_right': (int(OMRConfig.TEMPLATE_WIDTH), 0),
@@ -400,7 +458,6 @@ def process_omr():
                     max_fill = fill_pct
                     detected_option = option
             
-            # Mark bubbles
             if detected_option:
                 for bubble in question_bubbles:
                     if bubble['option'] == detected_option:
@@ -452,7 +509,6 @@ def process_omr():
                     max_fill = fill_pct
                     detected_option = option
             
-            # Mark bubbles
             if detected_option:
                 for bubble in question_bubbles:
                     if bubble['option'] == detected_option:
@@ -478,11 +534,11 @@ def process_omr():
                     'status': 'not_marked'
                 })
         
-        # Convert result image to base64
+        # Convert to base64
         _, buffer = cv2.imencode('.jpg', result_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
         img_base64 = base64.b64encode(buffer).decode('utf-8')
         
-        # Also save original with detected corners marked
+        # Original with corners
         for corner_name, (cx, cy) in corners.items():
             cv2.circle(original_img, (cx, cy), 8, (255, 0, 255), -1)
             cv2.putText(original_img, corner_name[:2].upper(), (cx + 12, cy), 
@@ -495,6 +551,7 @@ def process_omr():
         
         return jsonify({
             'success': True,
+            'detection_method': detection_method,
             'corners_detected': len(corners),
             'original_corners': {k: list(v) for k, v in corners.items()},
             'perspective_corrected': True,
