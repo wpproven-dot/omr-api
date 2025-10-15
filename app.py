@@ -4,12 +4,14 @@ import cv2
 import numpy as np
 import os
 import base64
+import csv
+from io import StringIO
 
 app = Flask(__name__)
 CORS(app)
 
 # =====================================================
-# OMR TEMPLATE - LOOKUP TABLE ANCHOR SYSTEM
+# OMR TEMPLATE - LOOKUP TABLE ANCHOR SYSTEM + ANSWER KEY
 # =====================================================
 class OMRConfig:
     # Template dimensions
@@ -125,21 +127,9 @@ def find_corner_markers(image):
     return corners
 
 def interpolate_position(anchors, question_num, scale_x, scale_y, top_left):
-    """
-    Get position for a question using piecewise linear interpolation between anchor points
-    
-    Args:
-        anchors: Dictionary of anchor points {question_num: {'x': x, 'y': y}}
-        question_num: Question number to find position for
-        scale_x, scale_y: Scale factors
-        top_left: Top-left corner position
-    
-    Returns:
-        (x, y) position in actual image coordinates
-    """
+    """Get position for a question using piecewise linear interpolation"""
     anchor_questions = sorted(anchors.keys())
     
-    # If exact anchor exists, use it
     if question_num in anchors:
         template_x = anchors[question_num]['x']
         template_y = anchors[question_num]['y']
@@ -147,7 +137,6 @@ def interpolate_position(anchors, question_num, scale_x, scale_y, top_left):
         actual_y = top_left[1] + (template_y * scale_y)
         return (actual_x, actual_y)
     
-    # Find surrounding anchors for interpolation
     lower_anchor = None
     upper_anchor = None
     
@@ -159,7 +148,6 @@ def interpolate_position(anchors, question_num, scale_x, scale_y, top_left):
             break
     
     if lower_anchor is None or upper_anchor is None:
-        # Shouldn't happen, but fallback
         closest = min(anchor_questions, key=lambda x: abs(x - question_num))
         template_x = anchors[closest]['x']
         template_y = anchors[closest]['y']
@@ -167,18 +155,14 @@ def interpolate_position(anchors, question_num, scale_x, scale_y, top_left):
         actual_y = top_left[1] + (template_y * scale_y)
         return (actual_x, actual_y)
     
-    # Linear interpolation between lower and upper anchors
     lower_data = anchors[lower_anchor]
     upper_data = anchors[upper_anchor]
     
-    # Calculate progress between anchors
     progress = (question_num - lower_anchor) / (upper_anchor - lower_anchor)
     
-    # Interpolate template coordinates
     template_x = lower_data['x'] + progress * (upper_data['x'] - lower_data['x'])
     template_y = lower_data['y'] + progress * (upper_data['y'] - lower_data['y'])
     
-    # Convert to actual coordinates
     actual_x = top_left[0] + (template_x * scale_x)
     actual_y = top_left[1] + (template_y * scale_y)
     
@@ -210,22 +194,37 @@ def check_bubble_filled(gray_img, x, y, radius, threshold):
     except Exception as e:
         return False, 0.0
 
+def parse_answer_key(csv_content):
+    """Parse CSV answer key"""
+    answer_key = {}
+    try:
+        reader = csv.DictReader(StringIO(csv_content))
+        for row in reader:
+            q_num = int(row.get('question', row.get('Question', row.get('Q', 0))))
+            answer = row.get('answer', row.get('Answer', row.get('A', ''))).strip().upper()
+            if q_num > 0 and answer in ['A', 'B', 'C', 'D']:
+                answer_key[q_num] = answer
+    except Exception as e:
+        pass
+    return answer_key
+
 @app.route('/')
 def home():
     return '''
     <div style="text-align:center; font-family:Arial; padding:50px;">
-        <h1>🎯 OMR API v7.0 FINAL</h1>
-        <p style="font-size:1.2em; color:#667eea;">Lookup Table Anchor System - Professional Grade</p>
-        <p style="color:#666;">Medical Student OMR Sheet Checker</p>
+        <h1>🎓 OMR Answer Checker v7.1</h1>
+        <p style="font-size:1.2em; color:#667eea;">OMR Scoring Machine - With Answer Key</p>
+        <p style="color:#666;">Automated Medical Exam Evaluation System</p>
         <hr style="margin:30px 0; border:none; border-top:2px solid #667eea;">
         <div style="text-align:left; max-width:600px; margin:0 auto;">
-            <h3>✨ V7.0 FINAL Features:</h3>
+            <h3>Features:</h3>
             <ul style="line-height:2;">
-                <li>✅ Anchor-based positioning (Q1, Q5, Q10, Q15, Q20, Q25)</li>
-                <li>✅ Piecewise linear interpolation</li>
-                <li>✅ Zero cumulative error - mathematically perfect</li>
-                <li>✅ Measured positions every 5 questions</li>
-                <li>✅ 100% accuracy guaranteed</li>
+                <li>✅ Detects filled bubbles with anchor-based positioning</li>
+                <li>✅ Compares with answer key (CSV)</li>
+                <li>✅ Green circle = Correct answer</li>
+                <li>✅ Red circle = Wrong answer</li>
+                <li>✅ Yellow circle = Skipped</li>
+                <li>✅ Automatic scoring</li>
             </ul>
         </div>
     </div>
@@ -235,19 +234,32 @@ def home():
 def test():
     return jsonify({
         'status': 'ok',
-        'message': 'OMR API v7.0 FINAL - Lookup table anchor system',
-        'version': '7.0'
+        'message': 'OMR Answer Checker v7.1',
+        'version': '7.1'
     })
 
-@app.route('/process-omr', methods=['POST'])
-def process_omr():
+@app.route('/process-omr-with-key', methods=['POST'])
+def process_omr_with_key():
     try:
         if 'file' not in request.files:
-            return jsonify({'error': 'No file uploaded'}), 400
+            return jsonify({'error': 'No OMR image uploaded'}), 400
         
-        file = request.files['file']
-        filepath = f'/tmp/{file.filename}'
-        file.save(filepath)
+        if 'answer_key' not in request.files:
+            return jsonify({'error': 'No answer key CSV uploaded'}), 400
+        
+        omr_file = request.files['file']
+        key_file = request.files['answer_key']
+        
+        # Read CSV answer key
+        answer_key_content = key_file.read().decode('utf-8')
+        answer_key = parse_answer_key(answer_key_content)
+        
+        if not answer_key:
+            return jsonify({'error': 'Invalid CSV format. Use columns: question, answer'}), 400
+        
+        # Save and read OMR image
+        filepath = f'/tmp/{omr_file.filename}'
+        omr_file.save(filepath)
         
         img = cv2.imread(filepath)
         if img is None:
@@ -265,8 +277,7 @@ def process_omr():
         if len(corners) < 4:
             return jsonify({
                 'error': f'Could not detect all 4 corners. Found {len(corners)} corners.',
-                'corners_found': len(corners),
-                'corners_detected': list(corners.keys())
+                'corners_found': len(corners)
             }), 400
         
         top_left = corners['top_left']
@@ -355,17 +366,22 @@ def process_omr():
                       int(bubble_radius), (0, 255, 0), 2)
         
         # ==========================================
-        # DETECT ANSWERS - COLUMN 1 (Q1-Q25)
-        # Using anchor-based interpolation
+        # DETECT ANSWERS & COMPARE WITH KEY
         # ==========================================
         answers = []
+        score_data = {
+            'correct': 0,
+            'incorrect': 0,
+            'skipped': 0,
+            'score_percentage': 0
+        }
         
+        # Process Column 1 (Q1-Q25)
         for q_num in range(1, OMRConfig.Q1_TOTAL + 1):
             detected_option = None
             max_fill = 0
             question_bubbles = []
             
-            # Get position using anchor interpolation
             base_x, base_y = interpolate_position(
                 OMRConfig.COLUMN1_ANCHORS, 
                 q_num, 
@@ -392,41 +408,56 @@ def process_omr():
                     max_fill = fill_pct
                     detected_option = option
             
+            # Determine result
+            correct_answer = answer_key.get(q_num, None)
+            result_status = 'skipped'
+            mark_color = (0, 255, 255)  # Yellow for skipped
+            
+            if detected_option is None:
+                result_status = 'skipped'
+                mark_color = (0, 255, 255)  # Yellow
+                score_data['skipped'] += 1
+            elif detected_option == correct_answer:
+                result_status = 'correct'
+                mark_color = (0, 255, 0)  # Green
+                score_data['correct'] += 1
+            else:
+                result_status = 'incorrect'
+                mark_color = (0, 0, 255)  # Red
+                score_data['incorrect'] += 1
+            
             # Mark bubbles
             for bubble in question_bubbles:
                 if detected_option and bubble['option'] == detected_option:
                     cv2.circle(result_img, (bubble['x'], bubble['y']), 
-                              int(bubble_radius), (0, 255, 0), 2)
+                              int(bubble_radius), mark_color, 2)
                     answers.append({
                         'question': q_num,
-                        'answer': detected_option,
-                        'confidence': round(bubble['fill_pct'] * 100, 1),
-                        'status': 'marked'
+                        'student_answer': detected_option,
+                        'correct_answer': correct_answer,
+                        'status': result_status,
+                        'confidence': round(bubble['fill_pct'] * 100, 1)
                     })
                     break
             
             if not detected_option:
                 for bubble in question_bubbles:
                     cv2.circle(result_img, (bubble['x'], bubble['y']), 
-                              int(bubble_radius), (128, 128, 128), 1)
+                              int(bubble_radius), mark_color, 1)
                 answers.append({
                     'question': q_num,
-                    'answer': None,
-                    'confidence': 0,
-                    'status': 'not_marked'
+                    'student_answer': None,
+                    'correct_answer': correct_answer,
+                    'status': result_status,
+                    'confidence': 0
                 })
         
-        # ==========================================
-        # DETECT ANSWERS - COLUMN 2 (Q26-Q50)
-        # Using anchor-based interpolation
-        # ==========================================
-        
+        # Process Column 2 (Q26-Q50)
         for q_num in range(26, 26 + OMRConfig.Q2_TOTAL):
             detected_option = None
             max_fill = 0
             question_bubbles = []
             
-            # Get position using anchor interpolation
             base_x, base_y = interpolate_position(
                 OMRConfig.COLUMN2_ANCHORS, 
                 q_num, 
@@ -453,29 +484,54 @@ def process_omr():
                     max_fill = fill_pct
                     detected_option = option
             
+            # Determine result
+            correct_answer = answer_key.get(q_num, None)
+            result_status = 'skipped'
+            mark_color = (0, 255, 255)  # Yellow for skipped
+            
+            if detected_option is None:
+                result_status = 'skipped'
+                mark_color = (0, 255, 255)  # Yellow
+                score_data['skipped'] += 1
+            elif detected_option == correct_answer:
+                result_status = 'correct'
+                mark_color = (0, 255, 0)  # Green
+                score_data['correct'] += 1
+            else:
+                result_status = 'incorrect'
+                mark_color = (0, 0, 255)  # Red
+                score_data['incorrect'] += 1
+            
             # Mark bubbles
             for bubble in question_bubbles:
                 if detected_option and bubble['option'] == detected_option:
                     cv2.circle(result_img, (bubble['x'], bubble['y']), 
-                              int(bubble_radius), (0, 255, 0), 2)
+                              int(bubble_radius), mark_color, 2)
                     answers.append({
                         'question': q_num,
-                        'answer': detected_option,
-                        'confidence': round(bubble['fill_pct'] * 100, 1),
-                        'status': 'marked'
+                        'student_answer': detected_option,
+                        'correct_answer': correct_answer,
+                        'status': result_status,
+                        'confidence': round(bubble['fill_pct'] * 100, 1)
                     })
                     break
             
             if not detected_option:
                 for bubble in question_bubbles:
                     cv2.circle(result_img, (bubble['x'], bubble['y']), 
-                              int(bubble_radius), (128, 128, 128), 1)
+                              int(bubble_radius), mark_color, 1)
                 answers.append({
                     'question': q_num,
-                    'answer': None,
-                    'confidence': 0,
-                    'status': 'not_marked'
+                    'student_answer': None,
+                    'correct_answer': correct_answer,
+                    'status': result_status,
+                    'confidence': 0
                 })
+        
+        # Calculate score percentage
+        total_questions = score_data['correct'] + score_data['incorrect'] + score_data['skipped']
+        if total_questions > 0:
+            score_data['score_percentage'] = round((score_data['correct'] / total_questions) * 100, 2)
         
         # Convert result image to base64
         _, buffer = cv2.imencode('.jpg', result_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
@@ -485,25 +541,10 @@ def process_omr():
         
         return jsonify({
             'success': True,
-            'version': '7.0 FINAL',
-            'method': 'anchor_based_piecewise_interpolation',
-            'corners_detected': len(corners),
-            'corners': {k: list(v) for k, v in corners.items()},
-            'scale_factors': {
-                'x': round(scale_x, 4),
-                'y': round(scale_y, 4)
-            },
-            'anchor_points': {
-                'column1': list(OMRConfig.COLUMN1_ANCHORS.keys()),
-                'column2': list(OMRConfig.COLUMN2_ANCHORS.keys())
-            },
+            'version': '7.1',
             'roll_number': roll_number if roll_number else None,
-            'roll_detections': roll_detections,
             'set_code': set_code,
-            'set_detection': set_detection,
-            'total_questions': OMRConfig.Q1_TOTAL + OMRConfig.Q2_TOTAL,
-            'answers_marked': len([a for a in answers if a['status'] == 'marked']),
-            'answers_not_marked': len([a for a in answers if a['status'] == 'not_marked']),
+            'scoring': score_data,
             'answers': answers,
             'threshold_used': threshold,
             'result_image': f'data:image/jpeg;base64,{img_base64}'
