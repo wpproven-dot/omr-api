@@ -338,6 +338,11 @@ def process_omr():
                         if correct_answer and correct_answer in all_bubble_positions:
                             correct_x, correct_y = all_bubble_positions[correct_answer]
                             cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 2)
+                else:
+                    # SKIPPED - No answer detected, show correct answer with green circle
+                    if correct_answer and correct_answer in all_bubble_positions:
+                        correct_x, correct_y = all_bubble_positions[correct_answer]
+                        cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 2)
                 
                 answers.append({
                     'question': q_num,
