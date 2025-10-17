@@ -160,6 +160,7 @@ def home():
     <div style="text-align:center; font-family:Arial; padding:50px;">
         <h1>OMR Checker - 100 MCQ (4 Columns)</h1>
         <p style="font-size:1.2em; color:#667eea;">7-Digit Roll + 6-Digit Serial + 100 Questions</p>
+        <p style="color:#28a745; font-weight:bold;">✅ Green = Correct | ❌ Red = Wrong + Green shows correct answer</p>
         <hr style="margin:30px 0; border:none; border-top:2px solid #667eea;">
         <div style="text-align:left; max-width:600px; margin:0 auto;">
             <h3>Features:</h3>
@@ -168,8 +169,9 @@ def home():
                 <li>7-digit roll number detection</li>
                 <li>6-digit serial number detection</li>
                 <li>100 MCQ in 4 columns (25 each)</li>
-                <li>Bubble detection with visual marking</li>
-                <li>Red/Blue circle marking accuracy display</li>
+                <li>Smart answer checking with color coding</li>
+                <li>Green circle = Correct answer</li>
+                <li>Red circle = Wrong (+ Green shows correct)</li>
             </ul>
         </div>
     </div>
@@ -179,7 +181,7 @@ def home():
 def test():
     return jsonify({
         'status': 'ok',
-        'message': 'OMR Checker API - 100 MCQ Format'
+        'message': 'OMR Checker API - 100 MCQ Format with Answer Checking'
     })
 
 @app.route('/process-omr', methods=['POST'])
@@ -200,6 +202,11 @@ def process_omr():
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
         threshold = float(request.form.get('threshold', OMRConfig.FILL_THRESHOLD))
+        
+        # Get answer key from request (sent by WordPress)
+        answer_key_json = request.form.get('answer_key', '{}')
+        import json
+        answer_key = json.loads(answer_key_json)  # {1: 'A', 2: 'B', ...}
         
         # Find corner markers
         corners = find_corner_markers(img)
@@ -285,112 +292,67 @@ def process_omr():
         
         # ==========================================
         # DETECT ANSWERS - ALL 4 COLUMNS (100 MCQ)
+        # WITH COLOR CODING
         # ==========================================
         answers = []
         
-        # Column 1 (Q1-Q25)
-        for q_num in range(1, OMRConfig.Q1_TOTAL + 1):
-            detected_option = None
-            max_fill = 0
-            best_x, best_y = 0, 0
-            
-            base_x = top_left[0] + (OMRConfig.Q1_FROM_CORNER_X * scale_x)
-            base_y = top_left[1] + (OMRConfig.Q1_FROM_CORNER_Y * scale_y) + ((q_num - 1) * OMRConfig.Q1_VERTICAL_SPACING * scale_y)
-            
-            for opt_idx, option in enumerate(OMRConfig.Q_OPTIONS):
-                actual_x = base_x + (opt_idx * OMRConfig.Q1_OPTION_SPACING * scale_x)
-                actual_y = base_y
+        # Helper function to process each column
+        def process_column(start_q, total_q, base_x_offset, base_y_offset, v_spacing):
+            for q_num in range(start_q, start_q + total_q):
+                detected_option = None
+                max_fill = 0
+                best_x, best_y = 0, 0
+                all_bubble_positions = {}
                 
-                is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
+                base_x = top_left[0] + (base_x_offset * scale_x)
+                base_y = top_left[1] + (base_y_offset * scale_y) + ((q_num - start_q) * v_spacing * scale_y)
                 
-                if is_filled and fill_pct > max_fill:
-                    max_fill = fill_pct
-                    detected_option = option
-                    best_x, best_y = int(actual_x), int(actual_y)
-            
-            if detected_option:
-                cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (255, 0, 0), 2)  # Blue
-                answers.append({'question': q_num, 'answer': detected_option, 'confidence': round(max_fill * 100, 1), 'status': 'marked'})
-            else:
-                answers.append({'question': q_num, 'answer': None, 'confidence': 0, 'status': 'skipped'})
+                # Check all options and store positions
+                for opt_idx, option in enumerate(OMRConfig.Q_OPTIONS):
+                    actual_x = base_x + (opt_idx * OMRConfig.Q1_OPTION_SPACING * scale_x)
+                    actual_y = base_y
+                    
+                    all_bubble_positions[option] = (int(actual_x), int(actual_y))
+                    
+                    is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
+                    
+                    if is_filled and fill_pct > max_fill:
+                        max_fill = fill_pct
+                        detected_option = option
+                        best_x, best_y = int(actual_x), int(actual_y)
+                
+                # Determine if answer is correct
+                correct_answer = answer_key.get(str(q_num))
+                is_correct = False
+                
+                if detected_option:
+                    if correct_answer and detected_option == correct_answer:
+                        # CORRECT - Green circle
+                        cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 255, 0), 3)
+                        is_correct = True
+                    else:
+                        # WRONG - Red circle on student answer
+                        cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 0, 255), 3)
+                        
+                        # Show correct answer with green circle
+                        if correct_answer and correct_answer in all_bubble_positions:
+                            correct_x, correct_y = all_bubble_positions[correct_answer]
+                            cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 2)
+                
+                answers.append({
+                    'question': q_num,
+                    'answer': detected_option,
+                    'correct_answer': correct_answer,
+                    'is_correct': is_correct,
+                    'confidence': round(max_fill * 100, 1) if detected_option else 0,
+                    'status': 'correct' if is_correct else ('wrong' if detected_option else 'skipped')
+                })
         
-        # Column 2 (Q26-Q50)
-        for q_num in range(26, 26 + OMRConfig.Q2_TOTAL):
-            detected_option = None
-            max_fill = 0
-            best_x, best_y = 0, 0
-            
-            base_x = top_left[0] + (OMRConfig.Q2_FROM_CORNER_X * scale_x)
-            base_y = top_left[1] + (OMRConfig.Q2_FROM_CORNER_Y * scale_y) + ((q_num - 26) * OMRConfig.Q2_VERTICAL_SPACING * scale_y)
-            
-            for opt_idx, option in enumerate(OMRConfig.Q_OPTIONS):
-                actual_x = base_x + (opt_idx * OMRConfig.Q2_OPTION_SPACING * scale_x)
-                actual_y = base_y
-                
-                is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
-                
-                if is_filled and fill_pct > max_fill:
-                    max_fill = fill_pct
-                    detected_option = option
-                    best_x, best_y = int(actual_x), int(actual_y)
-            
-            if detected_option:
-                cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (255, 0, 0), 2)
-                answers.append({'question': q_num, 'answer': detected_option, 'confidence': round(max_fill * 100, 1), 'status': 'marked'})
-            else:
-                answers.append({'question': q_num, 'answer': None, 'confidence': 0, 'status': 'skipped'})
-        
-        # Column 3 (Q51-Q75)
-        for q_num in range(51, 51 + OMRConfig.Q3_TOTAL):
-            detected_option = None
-            max_fill = 0
-            best_x, best_y = 0, 0
-            
-            base_x = top_left[0] + (OMRConfig.Q3_FROM_CORNER_X * scale_x)
-            base_y = top_left[1] + (OMRConfig.Q3_FROM_CORNER_Y * scale_y) + ((q_num - 51) * OMRConfig.Q3_VERTICAL_SPACING * scale_y)
-            
-            for opt_idx, option in enumerate(OMRConfig.Q_OPTIONS):
-                actual_x = base_x + (opt_idx * OMRConfig.Q3_OPTION_SPACING * scale_x)
-                actual_y = base_y
-                
-                is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
-                
-                if is_filled and fill_pct > max_fill:
-                    max_fill = fill_pct
-                    detected_option = option
-                    best_x, best_y = int(actual_x), int(actual_y)
-            
-            if detected_option:
-                cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (255, 0, 0), 2)
-                answers.append({'question': q_num, 'answer': detected_option, 'confidence': round(max_fill * 100, 1), 'status': 'marked'})
-            else:
-                answers.append({'question': q_num, 'answer': None, 'confidence': 0, 'status': 'skipped'})
-        
-        # Column 4 (Q76-Q100)
-        for q_num in range(76, 76 + OMRConfig.Q4_TOTAL):
-            detected_option = None
-            max_fill = 0
-            best_x, best_y = 0, 0
-            
-            base_x = top_left[0] + (OMRConfig.Q4_FROM_CORNER_X * scale_x)
-            base_y = top_left[1] + (OMRConfig.Q4_FROM_CORNER_Y * scale_y) + ((q_num - 76) * OMRConfig.Q4_VERTICAL_SPACING * scale_y)
-            
-            for opt_idx, option in enumerate(OMRConfig.Q_OPTIONS):
-                actual_x = base_x + (opt_idx * OMRConfig.Q4_OPTION_SPACING * scale_x)
-                actual_y = base_y
-                
-                is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
-                
-                if is_filled and fill_pct > max_fill:
-                    max_fill = fill_pct
-                    detected_option = option
-                    best_x, best_y = int(actual_x), int(actual_y)
-            
-            if detected_option:
-                cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (255, 0, 0), 2)
-                answers.append({'question': q_num, 'answer': detected_option, 'confidence': round(max_fill * 100, 1), 'status': 'marked'})
-            else:
-                answers.append({'question': q_num, 'answer': None, 'confidence': 0, 'status': 'skipped'})
+        # Process all 4 columns
+        process_column(1, OMRConfig.Q1_TOTAL, OMRConfig.Q1_FROM_CORNER_X, OMRConfig.Q1_FROM_CORNER_Y, OMRConfig.Q1_VERTICAL_SPACING)
+        process_column(26, OMRConfig.Q2_TOTAL, OMRConfig.Q2_FROM_CORNER_X, OMRConfig.Q2_FROM_CORNER_Y, OMRConfig.Q2_VERTICAL_SPACING)
+        process_column(51, OMRConfig.Q3_TOTAL, OMRConfig.Q3_FROM_CORNER_X, OMRConfig.Q3_FROM_CORNER_Y, OMRConfig.Q3_VERTICAL_SPACING)
+        process_column(76, OMRConfig.Q4_TOTAL, OMRConfig.Q4_FROM_CORNER_X, OMRConfig.Q4_FROM_CORNER_Y, OMRConfig.Q4_VERTICAL_SPACING)
         
         # Convert to base64
         _, buffer = cv2.imencode('.jpg', result_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
@@ -398,13 +360,20 @@ def process_omr():
         
         os.remove(filepath)
         
+        # Calculate stats
+        correct_count = len([a for a in answers if a['status'] == 'correct'])
+        wrong_count = len([a for a in answers if a['status'] == 'wrong'])
+        skipped_count = len([a for a in answers if a['status'] == 'skipped'])
+        
         return jsonify({
             'success': True,
             'roll_number': roll_number if roll_number else None,
             'serial_number': serial_number if serial_number else None,
             'total_questions': 100,
-            'marked': len([a for a in answers if a['status'] == 'marked']),
-            'skipped': len([a for a in answers if a['status'] == 'skipped']),
+            'correct': correct_count,
+            'wrong': wrong_count,
+            'skipped': skipped_count,
+            'marked': correct_count + wrong_count,
             'answers': answers,
             'threshold_used': threshold,
             'result_image': f'data:image/jpeg;base64,{img_base64}'
