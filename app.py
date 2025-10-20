@@ -9,7 +9,7 @@ app = Flask(__name__)
 CORS(app)
 
 # =====================================================
-# OMR TEMPLATE - 100 MCQ (4 COLUMNS)
+# OMR TEMPLATE - 100 MCQ (4 COLUMNS) - UNCHANGED
 # =====================================================
 class OMRConfig100:
     TEMPLATE_WIDTH = 434.5635
@@ -65,45 +65,47 @@ class OMRConfig100:
     Q_OPTIONS = ['A', 'B', 'C', 'D']
 
 # =====================================================
-# OMR TEMPLATE - 50 MCQ (2 COLUMNS)
+# OMR TEMPLATE - 50 MCQ (2 COLUMNS) - NEW MEASUREMENTS
 # =====================================================
 class OMRConfig50:
     TEMPLATE_WIDTH = 345.6
     TEMPLATE_HEIGHT = 511.2
     CORNER_SQUARE_WIDTH = 10.0
     CORNER_SQUARE_HEIGHT = 10.0
-    CORNER_HORIZONTAL_DIST = 311.0764
-    CORNER_VERTICAL_DIST = 468.2187
+    CORNER_HORIZONTAL_DIST = 309.776
+    CORNER_VERTICAL_DIST = 467.6418
     BUBBLE_DIAMETER = 11.0
     FILL_THRESHOLD = 0.35
     
     # Roll Number (7 digits)
-    ROLL_FROM_CORNER_X = 14.5028
-    ROLL_FROM_CORNER_Y = 42.1802
-    ROLL_VERTICAL_SPACING = 16.6352
-    ROLL_HORIZONTAL_SPACING = 17.4359
+    ROLL_FROM_CORNER_X = 13.2077
+    ROLL_FROM_CORNER_Y = 41.1813
+    ROLL_VERTICAL_SPACING = 16.6317
+    ROLL_HORIZONTAL_SPACING = 17.442
     ROLL_DIGITS = 7
     ROLL_OPTIONS = 10
     
     # Serial Number (6 digits)
-    SERIAL_FROM_CORNER_X = 22.9152
-    SERIAL_FROM_CORNER_Y = 307.0002
-    SERIAL_VERTICAL_SPACING = 16.6266
-    SERIAL_HORIZONTAL_SPACING = 17.6559
+    SERIAL_FROM_CORNER_X = 13.0459
+    SERIAL_FROM_CORNER_Y = 307.6707
+    SERIAL_VERTICAL_SPACING = 16.6262
+    SERIAL_HORIZONTAL_SPACING = 17.6616
     SERIAL_DIGITS = 6
     SERIAL_OPTIONS = 10
     
     # Questions (50 MCQ in 2 columns)
-    Q1_FROM_CORNER_X = 153.952
-    Q1_FROM_CORNER_Y = 18.8907
+    # Column 1: Q1-Q25
+    Q1_FROM_CORNER_X = 152.6586
+    Q1_FROM_CORNER_Y = 17.894
     Q1_OPTION_SPACING = 19.1976
-    Q1_VERTICAL_SPACING = 18.2549
+    Q1_VERTICAL_SPACING = 18.2594
     Q1_TOTAL = 25
     
-    Q2_FROM_CORNER_X = 241.2513
-    Q2_FROM_CORNER_Y = 18.8907
+    # Column 2: Q26-Q50
+    Q2_FROM_CORNER_X = 239.9378
+    Q2_FROM_CORNER_Y = 17.894
     Q2_OPTION_SPACING = 19.1976
-    Q2_VERTICAL_SPACING = 18.2549
+    Q2_VERTICAL_SPACING = 18.2594
     Q2_TOTAL = 25
     
     Q_OPTIONS = ['A', 'B', 'C', 'D']
@@ -257,7 +259,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
     # Detect Answers
     answers = []
     
-    def process_column(start_q, total_q, base_x_offset, base_y_offset, v_spacing):
+    def process_column(start_q, total_q, base_x_offset, base_y_offset, v_spacing, opt_spacing):
         for q_num in range(start_q, start_q + total_q):
             detected_option = None
             max_fill = 0
@@ -268,7 +270,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
             base_y = top_left[1] + (base_y_offset * scale_y) + ((q_num - start_q) * v_spacing * scale_y)
             
             for opt_idx, option in enumerate(config.Q_OPTIONS):
-                actual_x = base_x + (opt_idx * config.Q1_OPTION_SPACING * scale_x)
+                actual_x = base_x + (opt_idx * opt_spacing * scale_x)
                 actual_y = base_y
                 all_bubble_positions[option] = (int(actual_x), int(actual_y))
                 
@@ -307,13 +309,19 @@ def process_omr_sheet(img, config, threshold, answer_key):
     
     # Process columns based on config
     if hasattr(config, 'Q4_FROM_CORNER_X'):  # 100 MCQ
-        process_column(1, config.Q1_TOTAL, config.Q1_FROM_CORNER_X, config.Q1_FROM_CORNER_Y, config.Q1_VERTICAL_SPACING)
-        process_column(26, config.Q2_TOTAL, config.Q2_FROM_CORNER_X, config.Q2_FROM_CORNER_Y, config.Q2_VERTICAL_SPACING)
-        process_column(51, config.Q3_TOTAL, config.Q3_FROM_CORNER_X, config.Q3_FROM_CORNER_Y, config.Q3_VERTICAL_SPACING)
-        process_column(76, config.Q4_TOTAL, config.Q4_FROM_CORNER_X, config.Q4_FROM_CORNER_Y, config.Q4_VERTICAL_SPACING)
+        process_column(1, config.Q1_TOTAL, config.Q1_FROM_CORNER_X, config.Q1_FROM_CORNER_Y, 
+                      config.Q1_VERTICAL_SPACING, config.Q1_OPTION_SPACING)
+        process_column(26, config.Q2_TOTAL, config.Q2_FROM_CORNER_X, config.Q2_FROM_CORNER_Y, 
+                      config.Q2_VERTICAL_SPACING, config.Q2_OPTION_SPACING)
+        process_column(51, config.Q3_TOTAL, config.Q3_FROM_CORNER_X, config.Q3_FROM_CORNER_Y, 
+                      config.Q3_VERTICAL_SPACING, config.Q3_OPTION_SPACING)
+        process_column(76, config.Q4_TOTAL, config.Q4_FROM_CORNER_X, config.Q4_FROM_CORNER_Y, 
+                      config.Q4_VERTICAL_SPACING, config.Q4_OPTION_SPACING)
     else:  # 50 MCQ
-        process_column(1, config.Q1_TOTAL, config.Q1_FROM_CORNER_X, config.Q1_FROM_CORNER_Y, config.Q1_VERTICAL_SPACING)
-        process_column(26, config.Q2_TOTAL, config.Q2_FROM_CORNER_X, config.Q2_FROM_CORNER_Y, config.Q2_VERTICAL_SPACING)
+        process_column(1, config.Q1_TOTAL, config.Q1_FROM_CORNER_X, config.Q1_FROM_CORNER_Y, 
+                      config.Q1_VERTICAL_SPACING, config.Q1_OPTION_SPACING)
+        process_column(26, config.Q2_TOTAL, config.Q2_FROM_CORNER_X, config.Q2_FROM_CORNER_Y, 
+                      config.Q2_VERTICAL_SPACING, config.Q2_OPTION_SPACING)
     
     # Convert to base64
     _, buffer = cv2.imencode('.jpg', result_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
@@ -342,12 +350,12 @@ def home():
     return '''
     <div style="text-align:center; font-family:Arial; padding:50px;">
         <h1>OMR Checker API - Dual Format Support</h1>
-        <p style="font-size:1.2em; color:#667eea;">50 MCQ & 100 MCQ Support</p>
+        <p style="font-size:1.2em; color:#667eea;">50 MCQ & 100 MCQ Support (Updated 50 MCQ Measurements)</p>
         <hr style="margin:30px 0;">
         <h3>Endpoints:</h3>
         <ul style="line-height:2;">
             <li><code>/process-omr</code> - Auto-detect format</li>
-            <li><code>/process-omr-50</code> - Force 50 MCQ</li>
+            <li><code>/process-omr-50</code> - Force 50 MCQ (NEW MEASUREMENTS)</li>
             <li><code>/process-omr-100</code> - Force 100 MCQ</li>
         </ul>
     </div>
