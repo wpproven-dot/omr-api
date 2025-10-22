@@ -9,7 +9,7 @@ app = Flask(__name__)
 CORS(app)
 
 # =====================================================
-# OMR TEMPLATE - 100 MCQ (4 COLUMNS) - UNCHANGED
+# OMR TEMPLATE - 100 MCQ (4 COLUMNS)
 # =====================================================
 class OMRConfig100:
     TEMPLATE_WIDTH = 434.5635
@@ -21,13 +21,13 @@ class OMRConfig100:
     BUBBLE_DIAMETER = 11.0
     FILL_THRESHOLD = 0.35
     
-    
-ROLL_FROM_CORNER_X = 15.1605
-ROLL_FROM_CORNER_Y = 40.2629
-ROLL_VERTICAL_SPACING = 16.6315
-ROLL_HORIZONTAL_SPACING = 17.4537
-ROLL_DIGITS = 7 
-ROLL_OPTIONS = 10
+    # Roll Number (6 digits)
+    ROLL_FROM_CORNER_X = 15.1605
+    ROLL_FROM_CORNER_Y = 40.2629
+    ROLL_VERTICAL_SPACING = 16.6315
+    ROLL_HORIZONTAL_SPACING = 17.4537
+    ROLL_DIGITS = 6
+    ROLL_OPTIONS = 10
     
     # Serial Number (6 digits)
     SERIAL_FROM_CORNER_X = 159.8187
@@ -65,7 +65,7 @@ ROLL_OPTIONS = 10
     Q_OPTIONS = ['A', 'B', 'C', 'D']
 
 # =====================================================
-# OMR TEMPLATE - 50 MCQ (2 COLUMNS) - NEW MEASUREMENTS
+# OMR TEMPLATE - 50 MCQ (2 COLUMNS)
 # =====================================================
 class OMRConfig50:
     TEMPLATE_WIDTH = 345.6
@@ -77,13 +77,13 @@ class OMRConfig50:
     BUBBLE_DIAMETER = 11.0
     FILL_THRESHOLD = 0.35
     
-    
-ROLL_FROM_CORNER_X = 13.2077
-ROLL_FROM_CORNER_Y = 41.1813
-ROLL_VERTICAL_SPACING = 16.6317
-ROLL_HORIZONTAL_SPACING = 17.442
-ROLL_DIGITS = 7 
-ROLL_OPTIONS = 10
+    # Roll Number (6 digits)
+    ROLL_FROM_CORNER_X = 13.2077
+    ROLL_FROM_CORNER_Y = 41.1813
+    ROLL_VERTICAL_SPACING = 16.6317
+    ROLL_HORIZONTAL_SPACING = 17.442
+    ROLL_DIGITS = 6
+    ROLL_OPTIONS = 10
     
     # Serial Number (6 digits)
     SERIAL_FROM_CORNER_X = 13.0459
@@ -350,12 +350,12 @@ def home():
     return '''
     <div style="text-align:center; font-family:Arial; padding:50px;">
         <h1>OMR Checker API - Dual Format Support</h1>
-        <p style="font-size:1.2em; color:#667eea;">50 MCQ & 100 MCQ Support (Updated 50 MCQ Measurements)</p>
+        <p style="font-size:1.2em; color:#667eea;">50 MCQ & 100 MCQ Support (6-Digit Roll Number)</p>
         <hr style="margin:30px 0;">
         <h3>Endpoints:</h3>
         <ul style="line-height:2;">
             <li><code>/process-omr</code> - Auto-detect format</li>
-            <li><code>/process-omr-50</code> - Force 50 MCQ (NEW MEASUREMENTS)</li>
+            <li><code>/process-omr-50</code> - Force 50 MCQ</li>
             <li><code>/process-omr-100</code> - Force 100 MCQ</li>
         </ul>
     </div>
@@ -363,7 +363,7 @@ def home():
 
 @app.route('/test')
 def test():
-    return jsonify({'status': 'ok', 'message': 'OMR Checker API - Ready!'})
+    return jsonify({'status': 'ok', 'message': 'OMR Checker API - Ready! (6-Digit Roll)'})
 
 @app.route('/process-omr', methods=['POST'])
 def process_omr_auto():
