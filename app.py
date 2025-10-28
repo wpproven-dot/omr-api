@@ -21,12 +21,12 @@ class OMRConfig100:
     BUBBLE_DIAMETER = 11.0
     FILL_THRESHOLD = 0.35
     
-    # Roll Number (6 digits)
+    # Roll Number (7 digits)
     ROLL_FROM_CORNER_X = 15.1605
     ROLL_FROM_CORNER_Y = 40.2629
     ROLL_VERTICAL_SPACING = 16.6315
     ROLL_HORIZONTAL_SPACING = 17.4537
-    ROLL_DIGITS = 6
+    ROLL_DIGITS = 7
     ROLL_OPTIONS = 10
     
     # Serial Number (6 digits)
@@ -77,12 +77,12 @@ class OMRConfig50:
     BUBBLE_DIAMETER = 11.0
     FILL_THRESHOLD = 0.35
     
-    # Roll Number (6 digits)
+    # Roll Number (7 digits)
     ROLL_FROM_CORNER_X = 13.2077
     ROLL_FROM_CORNER_Y = 41.1813
     ROLL_VERTICAL_SPACING = 16.6317
     ROLL_HORIZONTAL_SPACING = 17.442
-    ROLL_DIGITS = 6
+    ROLL_DIGITS = 7
     ROLL_OPTIONS = 10
     
     # Serial Number (6 digits)
@@ -350,7 +350,7 @@ def home():
     return '''
     <div style="text-align:center; font-family:Arial; padding:50px;">
         <h1>OMR Checker API - Dual Format Support</h1>
-        <p style="font-size:1.2em; color:#667eea;">50 MCQ & 100 MCQ Support (6-Digit Roll Number)</p>
+        <p style="font-size:1.2em; color:#667eea;">50 MCQ & 100 MCQ Support (7-Digit Roll Number)</p>
         <hr style="margin:30px 0;">
         <h3>Endpoints:</h3>
         <ul style="line-height:2;">
@@ -363,7 +363,7 @@ def home():
 
 @app.route('/test')
 def test():
-    return jsonify({'status': 'ok', 'message': 'OMR Checker API - Ready! (6-Digit Roll)'})
+   return jsonify({'status': 'ok', 'message': 'OMR Checker API - Ready! (7-Digit Roll)'})
 
 @app.route('/process-omr', methods=['POST'])
 def process_omr_auto():
