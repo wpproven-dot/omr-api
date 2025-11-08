@@ -210,28 +210,40 @@ def process_omr_sheet(img, config, threshold, answer_key):
     for corner_name, (cx, cy) in corners.items():
         cv2.circle(result_img, (cx, cy), 6, (255, 0, 255), -1)
     
-    # Detect Roll Number
-    roll_number = ""
-    for digit_col in range(config.ROLL_DIGITS):
-        detected_digit = None
-        max_fill = 0
+   # Detect Roll Number (Support both 6 and 7 digits)
+roll_number = ""
+detected_digits = []
+
+for digit_col in range(config.ROLL_DIGITS):
+    detected_digit = None
+    max_fill = 0
+    
+    for row in range(config.ROLL_OPTIONS):
+        offset_x = config.ROLL_FROM_CORNER_X + (digit_col * config.ROLL_HORIZONTAL_SPACING)
+        offset_y = config.ROLL_FROM_CORNER_Y + (row * config.ROLL_VERTICAL_SPACING)
+        actual_x = top_left[0] + (offset_x * scale_x)
+        actual_y = top_left[1] + (offset_y * scale_y)
         
-        for row in range(config.ROLL_OPTIONS):
-            offset_x = config.ROLL_FROM_CORNER_X + (digit_col * config.ROLL_HORIZONTAL_SPACING)
-            offset_y = config.ROLL_FROM_CORNER_Y + (row * config.ROLL_VERTICAL_SPACING)
-            actual_x = top_left[0] + (offset_x * scale_x)
-            actual_y = top_left[1] + (offset_y * scale_y)
-            
-            is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
-            
-            if is_filled and fill_pct > max_fill:
-                max_fill = fill_pct
-                detected_digit = str(row)
-                best_x, best_y = int(actual_x), int(actual_y)
+        is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
         
-        if detected_digit:
-            roll_number += detected_digit
-            cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 255, 0), 2)
+        if is_filled and fill_pct > max_fill:
+            max_fill = fill_pct
+            detected_digit = str(row)
+            best_x, best_y = int(actual_x), int(actual_y)
+    
+    if detected_digit:
+        detected_digits.append({
+            'digit': detected_digit,
+            'position': digit_col,
+            'x': best_x,
+            'y': best_y
+        })
+
+# Build roll number from detected digits (support 6 or 7 digits)
+if len(detected_digits) >= 6:
+    for item in detected_digits:
+        roll_number += item['digit']
+        cv2.circle(result_img, (item['x'], item['y']), int(bubble_radius), (0, 255, 0), 2)
     
     # Detect Serial Number
     serial_number = ""
