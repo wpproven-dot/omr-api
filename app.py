@@ -21,12 +21,12 @@ class OMRConfig100:
     BUBBLE_DIAMETER = 11.0
     FILL_THRESHOLD = 0.35
     
-    # Roll Number (7 digits)
+    # Roll Number (Supports 6 or 7 digits)
     ROLL_FROM_CORNER_X = 15.1605
     ROLL_FROM_CORNER_Y = 40.2629
     ROLL_VERTICAL_SPACING = 16.6315
     ROLL_HORIZONTAL_SPACING = 17.4537
-    ROLL_DIGITS = 7
+    ROLL_DIGITS = 7  # Maximum digits supported
     ROLL_OPTIONS = 10
     
     # Serial Number (6 digits)
@@ -77,12 +77,12 @@ class OMRConfig50:
     BUBBLE_DIAMETER = 11.0
     FILL_THRESHOLD = 0.35
     
-    # Roll Number (7 digits)
+    # Roll Number (Supports 6 or 7 digits)
     ROLL_FROM_CORNER_X = 13.2077
     ROLL_FROM_CORNER_Y = 41.1813
     ROLL_VERTICAL_SPACING = 16.6317
     ROLL_HORIZONTAL_SPACING = 17.442
-    ROLL_DIGITS = 7
+    ROLL_DIGITS = 7  # Maximum digits supported
     ROLL_OPTIONS = 10
     
     # Serial Number (6 digits)
@@ -210,40 +210,40 @@ def process_omr_sheet(img, config, threshold, answer_key):
     for corner_name, (cx, cy) in corners.items():
         cv2.circle(result_img, (cx, cy), 6, (255, 0, 255), -1)
     
-   # Detect Roll Number (Support both 6 and 7 digits)
-roll_number = ""
-detected_digits = []
+    # Detect Roll Number (Support both 6 and 7 digits)
+    roll_number = ""
+    detected_digits = []
 
-for digit_col in range(config.ROLL_DIGITS):
-    detected_digit = None
-    max_fill = 0
-    
-    for row in range(config.ROLL_OPTIONS):
-        offset_x = config.ROLL_FROM_CORNER_X + (digit_col * config.ROLL_HORIZONTAL_SPACING)
-        offset_y = config.ROLL_FROM_CORNER_Y + (row * config.ROLL_VERTICAL_SPACING)
-        actual_x = top_left[0] + (offset_x * scale_x)
-        actual_y = top_left[1] + (offset_y * scale_y)
+    for digit_col in range(config.ROLL_DIGITS):
+        detected_digit = None
+        max_fill = 0
         
-        is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
+        for row in range(config.ROLL_OPTIONS):
+            offset_x = config.ROLL_FROM_CORNER_X + (digit_col * config.ROLL_HORIZONTAL_SPACING)
+            offset_y = config.ROLL_FROM_CORNER_Y + (row * config.ROLL_VERTICAL_SPACING)
+            actual_x = top_left[0] + (offset_x * scale_x)
+            actual_y = top_left[1] + (offset_y * scale_y)
+            
+            is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
+            
+            if is_filled and fill_pct > max_fill:
+                max_fill = fill_pct
+                detected_digit = str(row)
+                best_x, best_y = int(actual_x), int(actual_y)
         
-        if is_filled and fill_pct > max_fill:
-            max_fill = fill_pct
-            detected_digit = str(row)
-            best_x, best_y = int(actual_x), int(actual_y)
-    
-    if detected_digit:
-        detected_digits.append({
-            'digit': detected_digit,
-            'position': digit_col,
-            'x': best_x,
-            'y': best_y
-        })
+        if detected_digit:
+            detected_digits.append({
+                'digit': detected_digit,
+                'position': digit_col,
+                'x': best_x,
+                'y': best_y
+            })
 
-# Build roll number from detected digits (support 6 or 7 digits)
-if len(detected_digits) >= 6:
-    for item in detected_digits:
-        roll_number += item['digit']
-        cv2.circle(result_img, (item['x'], item['y']), int(bubble_radius), (0, 255, 0), 2)
+    # Build roll number from detected digits (support 6 or 7 digits)
+    if len(detected_digits) >= 6:
+        for item in detected_digits:
+            roll_number += item['digit']
+            cv2.circle(result_img, (item['x'], item['y']), int(bubble_radius), (0, 255, 0), 2)
     
     # Detect Serial Number
     serial_number = ""
@@ -362,7 +362,7 @@ def home():
     return '''
     <div style="text-align:center; font-family:Arial; padding:50px;">
         <h1>OMR Checker API - Dual Format Support</h1>
-        <p style="font-size:1.2em; color:#667eea;">50 MCQ & 100 MCQ Support (7-Digit Roll Number)</p>
+        <p style="font-size:1.2em; color:#667eea;">50 MCQ & 100 MCQ Support (6 or 7-Digit Roll Number)</p>
         <hr style="margin:30px 0;">
         <h3>Endpoints:</h3>
         <ul style="line-height:2;">
@@ -375,7 +375,7 @@ def home():
 
 @app.route('/test')
 def test():
-   return jsonify({'status': 'ok', 'message': 'OMR Checker API - Ready! (7-Digit Roll)'})
+   return jsonify({'status': 'ok', 'message': 'OMR Checker API - Ready! (6 or 7-Digit Roll)'})
 
 @app.route('/process-omr', methods=['POST'])
 def process_omr_auto():
