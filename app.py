@@ -290,14 +290,14 @@ def process_omr_sheet(img, config, threshold, answer_key):
                 # Draw subtle circle for all options (light gray, low opacity effect)
                 cv2.circle(result_img, (int(actual_x), int(actual_y)), int(bubble_radius), (200, 200, 200), 1)
                 
-                # Add option label (A, B, C, D) inside bubble
+                # Add option label (A, B, C, D) inside bubble - MUCH LARGER
                 font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.35
-                font_thickness = 1
+                font_scale = 0.65
+                font_thickness = 2
                 text_size = cv2.getTextSize(option, font, font_scale, font_thickness)[0]
                 text_x = int(actual_x - text_size[0] / 2)
                 text_y = int(actual_y + text_size[1] / 2)
-                cv2.putText(result_img, option, (text_x, text_y), font, font_scale, (180, 180, 180), font_thickness, cv2.LINE_AA)
+                cv2.putText(result_img, option, (text_x, text_y), font, font_scale, (160, 160, 160), font_thickness, cv2.LINE_AA)
                 
                 is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
                 
@@ -354,7 +354,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
     
     # Add white background with border and stats at top
     img_height, img_width = result_img.shape[:2]
-    header_height = 80
+    header_height = 100
     final_img = np.ones((img_height + header_height, img_width, 3), dtype=np.uint8) * 255
     
     # Copy OMR image below header
@@ -368,27 +368,40 @@ def process_omr_sheet(img, config, threshold, answer_key):
     wrong_count = len([a for a in answers if a['status'] == 'wrong'])
     skipped_count = len([a for a in answers if a['status'] == 'skipped'])
     
-    # Add stats to header with colored backgrounds
+    # Modern styled stats boxes - centered
     font = cv2.FONT_HERSHEY_SIMPLEX
-    y_pos = 35
-    x_start = 20
+    box_width = 180
+    box_height = 60
+    box_spacing = 20
+    total_width = (box_width * 3) + (box_spacing * 2)
+    x_start = (img_width - total_width) // 2
+    y_top = 20
     
-    # Correct (green background)
-    cv2.rectangle(final_img, (x_start, 15), (x_start + 150, 55), (200, 255, 200), -1)
-    cv2.rectangle(final_img, (x_start, 15), (x_start + 150, 55), (0, 200, 0), 2)
-    cv2.putText(final_img, f'Correct: {correct_count}', (x_start + 10, y_pos), font, 0.7, (0, 100, 0), 2)
+    def draw_rounded_rect_filled(img, pt1, pt2, color, radius=15):
+        x1, y1 = pt1
+        x2, y2 = pt2
+        # Draw rectangles
+        cv2.rectangle(img, (x1 + radius, y1), (x2 - radius, y2), color, -1)
+        cv2.rectangle(img, (x1, y1 + radius), (x2, y2 - radius), color, -1)
+        # Draw circles at corners
+        cv2.circle(img, (x1 + radius, y1 + radius), radius, color, -1)
+        cv2.circle(img, (x2 - radius, y1 + radius), radius, color, -1)
+        cv2.circle(img, (x1 + radius, y2 - radius), radius, color, -1)
+        cv2.circle(img, (x2 - radius, y2 - radius), radius, color, -1)
     
-    # Wrong (red background)
-    x_start += 170
-    cv2.rectangle(final_img, (x_start, 15), (x_start + 150, 55), (200, 200, 255), -1)
-    cv2.rectangle(final_img, (x_start, 15), (x_start + 150, 55), (0, 0, 200), 2)
-    cv2.putText(final_img, f'Wrong: {wrong_count}', (x_start + 10, y_pos), font, 0.7, (0, 0, 180), 2)
+    # Correct (modern green)
+    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (34, 197, 94), 15)
+    cv2.putText(final_img, f'Correct:{correct_count}', (x_start + 20, y_top + 38), font, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
     
-    # Skipped (gray background)
-    x_start += 170
-    cv2.rectangle(final_img, (x_start, 15), (x_start + 150, 55), (220, 220, 220), -1)
-    cv2.rectangle(final_img, (x_start, 15), (x_start + 150, 55), (100, 100, 100), 2)
-    cv2.putText(final_img, f'Skipped: {skipped_count}', (x_start + 10, y_pos), font, 0.7, (80, 80, 80), 2)
+    # Wrong (modern red)
+    x_start += box_width + box_spacing
+    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (239, 68, 68), 15)
+    cv2.putText(final_img, f'Wrong:{wrong_count}', (x_start + 25, y_top + 38), font, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+    
+    # Skipped (modern gray)
+    x_start += box_width + box_spacing
+    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (107, 114, 128), 15)
+    cv2.putText(final_img, f'Skipped:{skipped_count}', (x_start + 15, y_top + 38), font, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
     
     # Convert to base64
     _, buffer = cv2.imencode('.jpg', final_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
