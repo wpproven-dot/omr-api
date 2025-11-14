@@ -281,10 +281,23 @@ def process_omr_sheet(img, config, threshold, answer_key):
             base_x = top_left[0] + (base_x_offset * scale_x)
             base_y = top_left[1] + (base_y_offset * scale_y) + ((q_num - start_q) * v_spacing * scale_y)
             
+            # Draw all option bubbles with labels (A, B, C, D) - subtle with low opacity
             for opt_idx, option in enumerate(config.Q_OPTIONS):
                 actual_x = base_x + (opt_idx * opt_spacing * scale_x)
                 actual_y = base_y
                 all_bubble_positions[option] = (int(actual_x), int(actual_y))
+                
+                # Draw subtle circle for all options (light gray, low opacity effect)
+                cv2.circle(result_img, (int(actual_x), int(actual_y)), int(bubble_radius), (200, 200, 200), 1)
+                
+                # Add option label (A, B, C, D) inside bubble
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.35
+                font_thickness = 1
+                text_size = cv2.getTextSize(option, font, font_scale, font_thickness)[0]
+                text_x = int(actual_x - text_size[0] / 2)
+                text_y = int(actual_y + text_size[1] / 2)
+                cv2.putText(result_img, option, (text_x, text_y), font, font_scale, (180, 180, 180), font_thickness, cv2.LINE_AA)
                 
                 is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
                 
@@ -298,14 +311,18 @@ def process_omr_sheet(img, config, threshold, answer_key):
             
             if detected_option:
                 if correct_answer and detected_option == correct_answer:
-                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 255, 0), 3)
+                    # Correct answer - fill with green
+                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 255, 0), -1)
                     is_correct = True
                 else:
-                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 0, 255), 3)
+                    # Wrong answer - fill with red
+                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 0, 255), -1)
+                    # Show correct answer with green circle (not filled)
                     if correct_answer and correct_answer in all_bubble_positions:
                         correct_x, correct_y = all_bubble_positions[correct_answer]
                         cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 2)
             else:
+                # Skipped - show correct answer with simple green circle (not filled)
                 if correct_answer and correct_answer in all_bubble_positions:
                     correct_x, correct_y = all_bubble_positions[correct_answer]
                     cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 2)
@@ -335,13 +352,47 @@ def process_omr_sheet(img, config, threshold, answer_key):
         process_column(26, config.Q2_TOTAL, config.Q2_FROM_CORNER_X, config.Q2_FROM_CORNER_Y, 
                       config.Q2_VERTICAL_SPACING, config.Q2_OPTION_SPACING)
     
-    # Convert to base64
-    _, buffer = cv2.imencode('.jpg', result_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
-    img_base64 = base64.b64encode(buffer).decode('utf-8')
+    # Add white background with border and stats at top
+    img_height, img_width = result_img.shape[:2]
+    header_height = 80
+    final_img = np.ones((img_height + header_height, img_width, 3), dtype=np.uint8) * 255
     
+    # Copy OMR image below header
+    final_img[header_height:, :] = result_img
+    
+    # Add border around entire image
+    cv2.rectangle(final_img, (0, 0), (img_width - 1, img_height + header_height - 1), (0, 0, 0), 2)
+    
+    # Calculate stats
     correct_count = len([a for a in answers if a['status'] == 'correct'])
     wrong_count = len([a for a in answers if a['status'] == 'wrong'])
     skipped_count = len([a for a in answers if a['status'] == 'skipped'])
+    
+    # Add stats to header with colored backgrounds
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    y_pos = 35
+    x_start = 20
+    
+    # Correct (green background)
+    cv2.rectangle(final_img, (x_start, 15), (x_start + 150, 55), (200, 255, 200), -1)
+    cv2.rectangle(final_img, (x_start, 15), (x_start + 150, 55), (0, 200, 0), 2)
+    cv2.putText(final_img, f'Correct: {correct_count}', (x_start + 10, y_pos), font, 0.7, (0, 100, 0), 2)
+    
+    # Wrong (red background)
+    x_start += 170
+    cv2.rectangle(final_img, (x_start, 15), (x_start + 150, 55), (200, 200, 255), -1)
+    cv2.rectangle(final_img, (x_start, 15), (x_start + 150, 55), (0, 0, 200), 2)
+    cv2.putText(final_img, f'Wrong: {wrong_count}', (x_start + 10, y_pos), font, 0.7, (0, 0, 180), 2)
+    
+    # Skipped (gray background)
+    x_start += 170
+    cv2.rectangle(final_img, (x_start, 15), (x_start + 150, 55), (220, 220, 220), -1)
+    cv2.rectangle(final_img, (x_start, 15), (x_start + 150, 55), (100, 100, 100), 2)
+    cv2.putText(final_img, f'Skipped: {skipped_count}', (x_start + 10, y_pos), font, 0.7, (80, 80, 80), 2)
+    
+    # Convert to base64
+    _, buffer = cv2.imencode('.jpg', final_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    img_base64 = base64.b64encode(buffer).decode('utf-8')
     
     return {
         'success': True,
