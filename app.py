@@ -403,8 +403,8 @@ def process_omr_sheet(img, config, threshold, answer_key):
     draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 0), 15)
     cv2.putText(final_img, f'Skipped:{skipped_count}', (x_start + 15, y_top + 38), font, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
     
-    # Convert to base64
-    _, buffer = cv2.imencode('.jpg', final_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    # Convert to base64 with maximum quality
+    _, buffer = cv2.imencode('.jpg', final_img, [cv2.IMWRITE_JPEG_QUALITY, 100])
     img_base64 = base64.b64encode(buffer).decode('utf-8')
     
     return {
