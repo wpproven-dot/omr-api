@@ -368,7 +368,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
     wrong_count = len([a for a in answers if a['status'] == 'wrong'])
     skipped_count = len([a for a in answers if a['status'] == 'skipped'])
     
-    # Modern styled stats boxes - centered
+    # Modern styled stats boxes - centered with proper margins
     font = cv2.FONT_HERSHEY_SIMPLEX
     box_width = 180
     box_height = 60
@@ -389,18 +389,18 @@ def process_omr_sheet(img, config, threshold, answer_key):
         cv2.circle(img, (x1 + radius, y2 - radius), radius, color, -1)
         cv2.circle(img, (x2 - radius, y2 - radius), radius, color, -1)
     
-    # Correct (modern green)
-    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (34, 197, 94), 15)
+    # Correct (deep green)
+    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 128, 0), 15)
     cv2.putText(final_img, f'Correct:{correct_count}', (x_start + 20, y_top + 38), font, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
     
-    # Wrong (modern red)
+    # Wrong (deep red)
     x_start += box_width + box_spacing
-    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (239, 68, 68), 15)
+    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 200), 15)
     cv2.putText(final_img, f'Wrong:{wrong_count}', (x_start + 25, y_top + 38), font, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
     
-    # Skipped (modern gray)
+    # Skipped (black)
     x_start += box_width + box_spacing
-    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (107, 114, 128), 15)
+    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 0), 15)
     cv2.putText(final_img, f'Skipped:{skipped_count}', (x_start + 15, y_top + 38), font, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
     
     # Convert to base64
