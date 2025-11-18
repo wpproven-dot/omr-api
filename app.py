@@ -382,27 +382,25 @@ def process_omr_sheet(img, config, threshold, answer_key):
             correct_answer = answer_key.get(str(q_num))
             is_correct = False
             
-            # Draw bubbles based on status (cleaner visualization)
+            # Draw bubbles based on status - matching reference images exactly
             if detected_option:
                 if correct_answer and detected_option == correct_answer:
-                    # Correct - filled green circle
-                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 200, 0), -1)
-                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 255, 0), 2)
+                    # Correct - pure green filled circle
+                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 255, 0), -1)
                     is_correct = True
                 else:
-                    # Wrong - filled red circle
-                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 0, 200), -1)
-                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 0, 255), 2)
+                    # Wrong - pure red filled circle
+                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 0, 255), -1)
                     
-                    # Show correct answer with green outline only
+                    # Show correct answer with thin 1px green border circle
                     if correct_answer and correct_answer in all_bubble_positions:
                         correct_x, correct_y = all_bubble_positions[correct_answer]
-                        cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 3)
+                        cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 1)
             else:
-                # Skipped - show correct answer with green outline only
+                # Skipped - show correct answer with thin 1px green border circle
                 if correct_answer and correct_answer in all_bubble_positions:
                     correct_x, correct_y = all_bubble_positions[correct_answer]
-                    cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 3)
+                    cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 1)
             
             answers.append({
                 'question': q_num,
@@ -429,9 +427,9 @@ def process_omr_sheet(img, config, threshold, answer_key):
         process_column(26, config.Q2_TOTAL, config.Q2_FROM_CORNER_X, config.Q2_FROM_CORNER_Y, 
                       config.Q2_VERTICAL_SPACING, config.Q2_OPTION_SPACING)
     
-    # Add header with stats
+    # Add header with stats - matching reference style
     img_height, img_width = result_img.shape[:2]
-    header_height = 100
+    header_height = 70
     final_img = np.ones((img_height + header_height, img_width, 3), dtype=np.uint8) * 255
     
     final_img[header_height:, :] = result_img
@@ -442,15 +440,16 @@ def process_omr_sheet(img, config, threshold, answer_key):
     wrong_count = len([a for a in answers if a['status'] == 'wrong'])
     skipped_count = len([a for a in answers if a['status'] == 'skipped'])
     
+    # Smaller, cleaner stat boxes matching reference
     font = cv2.FONT_HERSHEY_SIMPLEX
-    box_width = 180
-    box_height = 60
-    box_spacing = 20
+    box_width = 140
+    box_height = 45
+    box_spacing = 15
     total_width = (box_width * 3) + (box_spacing * 2)
     x_start = (img_width - total_width) // 2
-    y_top = 20
+    y_top = 12
     
-    def draw_rounded_rect_filled(img, pt1, pt2, color, radius=15):
+    def draw_rounded_rect_filled(img, pt1, pt2, color, radius=10):
         x1, y1 = pt1
         x2, y2 = pt2
         cv2.rectangle(img, (x1 + radius, y1), (x2 - radius, y2), color, -1)
@@ -460,16 +459,19 @@ def process_omr_sheet(img, config, threshold, answer_key):
         cv2.circle(img, (x1 + radius, y2 - radius), radius, color, -1)
         cv2.circle(img, (x2 - radius, y2 - radius), radius, color, -1)
     
-    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 128, 0), 15)
-    cv2.putText(final_img, f'Correct:{correct_count}', (x_start + 20, y_top + 38), font, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+    # Correct (green)
+    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 180, 0), 10)
+    cv2.putText(final_img, f'Correct:{correct_count}', (x_start + 12, y_top + 30), font, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
     
+    # Wrong (red)
     x_start += box_width + box_spacing
-    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 200), 15)
-    cv2.putText(final_img, f'Wrong:{wrong_count}', (x_start + 25, y_top + 38), font, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 220), 10)
+    cv2.putText(final_img, f'Wrong:{wrong_count}', (x_start + 18, y_top + 30), font, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
     
+    # Skipped (black)
     x_start += box_width + box_spacing
-    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 0), 15)
-    cv2.putText(final_img, f'Skipped:{skipped_count}', (x_start + 15, y_top + 38), font, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+    draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 0), 10)
+    cv2.putText(final_img, f'Skipped:{skipped_count}', (x_start + 8, y_top + 30), font, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
     
     _, buffer = cv2.imencode('.jpg', final_img, [cv2.IMWRITE_JPEG_QUALITY, 100])
     img_base64 = base64.b64encode(buffer).decode('utf-8')
