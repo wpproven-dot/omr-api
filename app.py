@@ -111,12 +111,12 @@ class OMRConfig50:
     Q_OPTIONS = ['A', 'B', 'C', 'D']
 
 def find_corner_markers(image):
-    """Detect 4 corner markers - IMPROVED VERSION"""
+    """Detect 4 corner markers"""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     height, width = gray.shape
     
-    search_size_x = int(width * 0.1)  # Slightly larger search area
-    search_size_y = int(height * 0.1)
+    search_size_x = int(width * 0.08)
+    search_size_y = int(height * 0.08)
     
     corners = {}
     regions = {
@@ -133,7 +133,7 @@ def find_corner_markers(image):
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         best_score = 0
-        best_corner = None
+        best_contour = None
         
         for contour in contours:
             area = cv2.contourArea(contour)
@@ -149,85 +149,28 @@ def find_corner_markers(image):
                 
                 if score > best_score:
                     best_score = score
-                    # USE CORNER OF BOUNDING BOX (not centroid)
-                    if corner_name == 'top_left':
-                        best_corner = (x + x1, y + y1)
-                    elif corner_name == 'top_right':
-                        best_corner = (x + w + x1, y + y1)
-                    elif corner_name == 'bottom_left':
-                        best_corner = (x + x1, y + h + y1)
-                    else:  # bottom_right
-                        best_corner = (x + w + x1, y + h + y1)
+                    best_contour = contour
         
-        if best_corner is not None:
-            corners[corner_name] = best_corner
+        if best_contour is not None:
+            M = cv2.moments(best_contour)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"]) + x1
+                cy = int(M["m01"] / M["m00"]) + y1
+                corners[corner_name] = (cx, cy)
     
     return corners
 
-def apply_perspective_transform(image, corners, config):
-    """
-    Apply perspective correction to make image a perfect rectangle
-    This makes everything outside 4 corners irrelevant
-    """
-    if len(corners) < 4:
-        return None, None, None, None
-    
-    # Source points (detected corners)
-    src_points = np.float32([
-        corners['top_left'],
-        corners['top_right'],
-        corners['bottom_right'],
-        corners['bottom_left']
-    ])
-    
-    # Calculate output size based on detected distances
-    detected_width = np.linalg.norm(np.array(corners['top_right']) - np.array(corners['top_left']))
-    detected_height = np.linalg.norm(np.array(corners['bottom_left']) - np.array(corners['top_left']))
-    
-    # Use detected dimensions for output
-    output_width = int(detected_width)
-    output_height = int(detected_height)
-    
-    # Destination points (perfect rectangle)
-    dst_points = np.float32([
-        [0, 0],
-        [output_width, 0],
-        [output_width, output_height],
-        [0, output_height]
-    ])
-    
-    # Calculate perspective transformation matrix
-    matrix = cv2.getPerspectiveTransform(src_points, dst_points)
-    
-    # Apply transformation - this makes outside 4 corners irrelevant
-    corrected = cv2.warpPerspective(image, matrix, (output_width, output_height))
-    
-    # Calculate scale factors for the corrected image
-    scale_x = output_width / config.CORNER_HORIZONTAL_DIST
-    scale_y = output_height / config.CORNER_VERTICAL_DIST
-    
-    # New corners after correction (at perfect rectangle corners)
-    new_corners = {
-        'top_left': (0, 0),
-        'top_right': (output_width, 0),
-        'bottom_left': (0, output_height),
-        'bottom_right': (output_width, output_height)
-    }
-    
-    return corrected, new_corners, scale_x, scale_y
-
-def check_bubble_filled(gray_img, x, y, radius_x, radius_y, threshold):
-    """Check if bubble is filled - IMPROVED with separate X/Y radius"""
+def check_bubble_filled(gray_img, x, y, radius, threshold):
+    """Check if bubble is filled"""
     try:
         x, y = int(round(x)), int(round(y))
-        radius_x = int(round(radius_x))
-        radius_y = int(round(radius_y))
+        radius = int(round(radius))
         
-        if x < radius_x or y < radius_y or x >= gray_img.shape[1] - radius_x or y >= gray_img.shape[0] - radius_y:
+        if x < radius or y < radius or x >= gray_img.shape[1] - radius or y >= gray_img.shape[0] - radius:
             return False, 0.0
         
         mask = np.zeros(gray_img.shape, dtype=np.uint8)
-        cv2.ellipse(mask, (x, y), (radius_x, radius_y), 0, 0, 360, 255, -1)
+        cv2.circle(mask, (x, y), radius, 255, -1)
         roi = cv2.bitwise_and(gray_img, mask)
         inverted = cv2.bitwise_not(roi)
         
@@ -243,29 +186,29 @@ def check_bubble_filled(gray_img, x, y, radius_x, radius_y, threshold):
         return False, 0.0
 
 def process_omr_sheet(img, config, threshold, answer_key):
-    """Generic OMR processing for both 50 and 100 MCQ - WITH PERSPECTIVE CORRECTION"""
+    """Generic OMR processing for both 50 and 100 MCQ"""
+    result_img = img.copy()
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    # Step 1: Find corners on original image
+    # Find corners
     corners = find_corner_markers(img)
     if len(corners) < 4:
         return {'error': f'Could not detect all 4 corners. Found {len(corners)}'}
     
-    # Step 2: Apply perspective correction - THIS IS THE KEY FIX
-    corrected_img, corrected_corners, scale_x, scale_y = apply_perspective_transform(img, corners, config)
+    top_left = corners['top_left']
+    top_right = corners['top_right']
+    bottom_left = corners['bottom_left']
     
-    if corrected_img is None:
-        return {'error': 'Perspective correction failed'}
+    # Calculate scales
+    actual_width = top_right[0] - top_left[0]
+    actual_height = bottom_left[1] - top_left[1]
+    scale_x = actual_width / config.CORNER_HORIZONTAL_DIST
+    scale_y = actual_height / config.CORNER_VERTICAL_DIST
+    bubble_radius = (config.BUBBLE_DIAMETER / 2) * scale_x
     
-    # Step 3: Now work with corrected image (everything outside 4 corners is irrelevant now)
-    result_img = corrected_img.copy()
-    gray = cv2.cvtColor(corrected_img, cv2.COLOR_BGR2GRAY)
-    
-    top_left = corrected_corners['top_left']
-    
-    # Calculate bubble radii with separate X/Y scaling
-    bubble_radius_x = (config.BUBBLE_DIAMETER / 2) * scale_x
-    bubble_radius_y = (config.BUBBLE_DIAMETER / 2) * scale_y
-    bubble_radius_display = int((bubble_radius_x + bubble_radius_y) / 2)
+    # Mark corners
+    for corner_name, (cx, cy) in corners.items():
+        cv2.circle(result_img, (cx, cy), 6, (255, 0, 255), -1)
     
     # Detect Roll Number (Support both 6 and 7 digits)
     roll_number = ""
@@ -281,7 +224,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
             actual_x = top_left[0] + (offset_x * scale_x)
             actual_y = top_left[1] + (offset_y * scale_y)
             
-            is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius_x, bubble_radius_y, threshold)
+            is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
             
             if is_filled and fill_pct > max_fill:
                 max_fill = fill_pct
@@ -300,7 +243,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
     if len(detected_digits) >= 6:
         for item in detected_digits:
             roll_number += item['digit']
-            cv2.circle(result_img, (item['x'], item['y']), bubble_radius_display, (0, 255, 0), 2)
+            cv2.circle(result_img, (item['x'], item['y']), int(bubble_radius), (0, 255, 0), 2)
     
     # Detect Serial Number
     serial_number = ""
@@ -314,7 +257,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
             actual_x = top_left[0] + (offset_x * scale_x)
             actual_y = top_left[1] + (offset_y * scale_y)
             
-            is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius_x, bubble_radius_y, threshold)
+            is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
             
             if is_filled and fill_pct > max_fill:
                 max_fill = fill_pct
@@ -323,7 +266,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
         
         if detected_digit:
             serial_number += detected_digit
-            cv2.circle(result_img, (best_x, best_y), bubble_radius_display, (0, 255, 0), 2)
+            cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 255, 0), 2)
     
     # Detect Answers
     answers = []
@@ -345,7 +288,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
                 all_bubble_positions[option] = (int(actual_x), int(actual_y))
                 
                 # Draw subtle circle for all options (light gray, low opacity effect)
-                cv2.circle(result_img, (int(actual_x), int(actual_y)), bubble_radius_display, (200, 200, 200), 1)
+                cv2.circle(result_img, (int(actual_x), int(actual_y)), int(bubble_radius), (200, 200, 200), 1)
                 
                 # Add option label (A, B, C, D) inside bubble - MUCH LARGER
                 font = cv2.FONT_HERSHEY_SIMPLEX
@@ -356,7 +299,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
                 text_y = int(actual_y + text_size[1] / 2)
                 cv2.putText(result_img, option, (text_x, text_y), font, font_scale, (160, 160, 160), font_thickness, cv2.LINE_AA)
                 
-                is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius_x, bubble_radius_y, threshold)
+                is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
                 
                 if is_filled and fill_pct > max_fill:
                     max_fill = fill_pct
@@ -369,20 +312,20 @@ def process_omr_sheet(img, config, threshold, answer_key):
             if detected_option:
                 if correct_answer and detected_option == correct_answer:
                     # Correct answer - fill with green
-                    cv2.circle(result_img, (best_x, best_y), bubble_radius_display, (0, 255, 0), -1)
+                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 255, 0), -1)
                     is_correct = True
                 else:
                     # Wrong answer - fill with red
-                    cv2.circle(result_img, (best_x, best_y), bubble_radius_display, (0, 0, 255), -1)
+                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 0, 255), -1)
                     # Show correct answer with green circle (not filled)
                     if correct_answer and correct_answer in all_bubble_positions:
                         correct_x, correct_y = all_bubble_positions[correct_answer]
-                        cv2.circle(result_img, (correct_x, correct_y), bubble_radius_display, (0, 255, 0), 2)
+                        cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 2)
             else:
                 # Skipped - show correct answer with simple green circle (not filled)
                 if correct_answer and correct_answer in all_bubble_positions:
                     correct_x, correct_y = all_bubble_positions[correct_answer]
-                    cv2.circle(result_img, (correct_x, correct_y), bubble_radius_display, (0, 255, 0), 2)
+                    cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 2)
             
             answers.append({
                 'question': q_num,
