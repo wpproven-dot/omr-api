@@ -366,20 +366,11 @@ def process_omr_sheet(img, config, threshold, answer_key):
             base_x = top_left[0] + (base_x_offset * scale_x)
             base_y = top_left[1] + (base_y_offset * scale_y) + ((q_num - start_q) * v_spacing * scale_y)
             
+            # First pass: detect filled bubbles
             for opt_idx, option in enumerate(config.Q_OPTIONS):
                 actual_x = base_x + (opt_idx * opt_spacing * scale_x)
                 actual_y = base_y
                 all_bubble_positions[option] = (int(actual_x), int(actual_y))
-                
-                cv2.circle(result_img, (int(actual_x), int(actual_y)), int(bubble_radius), (200, 200, 200), 1)
-                
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.65
-                font_thickness = 2
-                text_size = cv2.getTextSize(option, font, font_scale, font_thickness)[0]
-                text_x = int(actual_x - text_size[0] / 2)
-                text_y = int(actual_y + text_size[1] / 2)
-                cv2.putText(result_img, option, (text_x, text_y), font, font_scale, (160, 160, 160), font_thickness, cv2.LINE_AA)
                 
                 is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
                 
@@ -391,19 +382,27 @@ def process_omr_sheet(img, config, threshold, answer_key):
             correct_answer = answer_key.get(str(q_num))
             is_correct = False
             
+            # Draw bubbles based on status (cleaner visualization)
             if detected_option:
                 if correct_answer and detected_option == correct_answer:
-                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 255, 0), -1)
+                    # Correct - filled green circle
+                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 200, 0), -1)
+                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 255, 0), 2)
                     is_correct = True
                 else:
-                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 0, 255), -1)
+                    # Wrong - filled red circle
+                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 0, 200), -1)
+                    cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 0, 255), 2)
+                    
+                    # Show correct answer with green outline only
                     if correct_answer and correct_answer in all_bubble_positions:
                         correct_x, correct_y = all_bubble_positions[correct_answer]
-                        cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 2)
+                        cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 3)
             else:
+                # Skipped - show correct answer with green outline only
                 if correct_answer and correct_answer in all_bubble_positions:
                     correct_x, correct_y = all_bubble_positions[correct_answer]
-                    cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 2)
+                    cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 3)
             
             answers.append({
                 'question': q_num,
