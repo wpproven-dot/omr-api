@@ -160,9 +160,9 @@ def find_corner_markers(image):
     
     return corners
 
+# ✅ NEW FUNCTION - ADD THIS!
 def apply_perspective_transform(img, corners, config):
-    """Apply perspective transformation to dewarp OMR sheet - THIS IS THE FIX!"""
-    # Order corners: top-left, top-right, bottom-right, bottom-left
+    """Apply perspective transformation to straighten angled/rotated OMR sheets"""
     src_points = np.float32([
         corners['top_left'],
         corners['top_right'],
@@ -170,7 +170,6 @@ def apply_perspective_transform(img, corners, config):
         corners['bottom_left']
     ])
     
-    # Destination points (perfect rectangle in template coordinates)
     dst_points = np.float32([
         [0, 0],
         [config.TEMPLATE_WIDTH, 0],
@@ -178,15 +177,12 @@ def apply_perspective_transform(img, corners, config):
         [0, config.TEMPLATE_HEIGHT]
     ])
     
-    # Calculate perspective transform matrix
     matrix = cv2.getPerspectiveTransform(src_points, dst_points)
-    
-    # Apply transformation
     warped = cv2.warpPerspective(img, matrix, 
                                   (int(config.TEMPLATE_WIDTH), 
                                    int(config.TEMPLATE_HEIGHT)))
     
-    return warped, matrix
+    return warped
 
 def check_bubble_filled(gray_img, x, y, radius, threshold):
     """Check if bubble is filled"""
@@ -214,25 +210,23 @@ def check_bubble_filled(gray_img, x, y, radius, threshold):
         return False, 0.0
 
 def process_omr_sheet(img, config, threshold, answer_key):
-    """Generic OMR processing for both 50 and 100 MCQ - WITH PERSPECTIVE CORRECTION"""
+    """Generic OMR processing for both 50 and 100 MCQ"""
     
     # Find corners
     corners = find_corner_markers(img)
     if len(corners) < 4:
         return {'error': f'Could not detect all 4 corners. Found {len(corners)}'}
     
-    # ✅ APPLY PERSPECTIVE CORRECTION - THIS FIXES THE ROTATION/ANGLE ISSUE!
-    warped_img, transform_matrix = apply_perspective_transform(img, corners, config)
-    warped_gray = cv2.cvtColor(warped_img, cv2.COLOR_BGR2GRAY)
+    # ✅ APPLY PERSPECTIVE TRANSFORMATION - THIS FIXES ANGLED SHEETS!
+    warped_img = apply_perspective_transform(img, corners, config)
     result_img = warped_img.copy()
+    gray = cv2.cvtColor(warped_img, cv2.COLOR_BGR2GRAY)
     
-    # ✅ NOW ALL CALCULATIONS ARE IN TEMPLATE COORDINATES (no scaling needed)
-    scale_x = 1.0  # Already in template coordinates
+    # ✅ NOW USE DIRECT TEMPLATE COORDINATES (no scaling needed)
+    top_left = (0, 0)  # Top-left is now at origin
+    scale_x = 1.0
     scale_y = 1.0
     bubble_radius = config.BUBBLE_DIAMETER / 2
-    
-    # ✅ Top-left corner is now at (0,0) in warped image
-    top_left = (0, 0)
     
     # Detect Roll Number (Support both 6 and 7 digits)
     roll_number = ""
@@ -248,7 +242,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
             actual_x = offset_x
             actual_y = offset_y
             
-            is_filled, fill_pct = check_bubble_filled(warped_gray, actual_x, actual_y, bubble_radius, threshold)
+            is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
             
             if is_filled and fill_pct > max_fill:
                 max_fill = fill_pct
@@ -281,7 +275,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
             actual_x = offset_x
             actual_y = offset_y
             
-            is_filled, fill_pct = check_bubble_filled(warped_gray, actual_x, actual_y, bubble_radius, threshold)
+            is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
             
             if is_filled and fill_pct > max_fill:
                 max_fill = fill_pct
@@ -323,7 +317,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
                 text_y = int(actual_y + text_size[1] / 2)
                 cv2.putText(result_img, option, (text_x, text_y), font, font_scale, (160, 160, 160), font_thickness, cv2.LINE_AA)
                 
-                is_filled, fill_pct = check_bubble_filled(warped_gray, actual_x, actual_y, bubble_radius, threshold)
+                is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
                 
                 if is_filled and fill_pct > max_fill:
                     max_fill = fill_pct
@@ -463,7 +457,7 @@ def home():
 
 @app.route('/test')
 def test():
-   return jsonify({'status': 'ok', 'message': 'OMR Checker API - Ready! (With Perspective Correction)'})
+   return jsonify({'status': 'ok', 'message': 'OMR Checker API with Perspective Correction - Ready!'})
 
 @app.route('/process-omr', methods=['POST'])
 def process_omr_auto():
