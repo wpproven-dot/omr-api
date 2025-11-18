@@ -4,7 +4,6 @@ import cv2
 import numpy as np
 import os
 import base64
-import json
 
 app = Flask(__name__)
 CORS(app)
@@ -27,7 +26,7 @@ class OMRConfig100:
     ROLL_FROM_CORNER_Y = 40.2629
     ROLL_VERTICAL_SPACING = 16.6315
     ROLL_HORIZONTAL_SPACING = 17.4537
-    ROLL_DIGITS = 7
+    ROLL_DIGITS = 7  # Maximum digits supported
     ROLL_OPTIONS = 10
     
     # Serial Number (6 digits)
@@ -83,7 +82,7 @@ class OMRConfig50:
     ROLL_FROM_CORNER_Y = 41.1813
     ROLL_VERTICAL_SPACING = 16.6317
     ROLL_HORIZONTAL_SPACING = 17.442
-    ROLL_DIGITS = 7
+    ROLL_DIGITS = 7  # Maximum digits supported
     ROLL_OPTIONS = 10
     
     # Serial Number (6 digits)
@@ -95,12 +94,14 @@ class OMRConfig50:
     SERIAL_OPTIONS = 10
     
     # Questions (50 MCQ in 2 columns)
+    # Column 1: Q1-Q25
     Q1_FROM_CORNER_X = 152.6586
     Q1_FROM_CORNER_Y = 17.894
     Q1_OPTION_SPACING = 19.1976
     Q1_VERTICAL_SPACING = 18.2594
     Q1_TOTAL = 25
     
+    # Column 2: Q26-Q50
     Q2_FROM_CORNER_X = 239.9378
     Q2_FROM_CORNER_Y = 17.894
     Q2_OPTION_SPACING = 19.1976
@@ -110,20 +111,12 @@ class OMRConfig50:
     Q_OPTIONS = ['A', 'B', 'C', 'D']
 
 def find_corner_markers(image):
-    """Enhanced corner detection with better preprocessing"""
+    """Detect 4 corner markers"""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
-    # Enhanced preprocessing
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    
-    # Morphological operations to clean up
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-    
     height, width = gray.shape
-    search_size_x = int(width * 0.12)
-    search_size_y = int(height * 0.12)
+    
+    search_size_x = int(width * 0.08)
+    search_size_y = int(height * 0.08)
     
     corners = {}
     regions = {
@@ -134,29 +127,25 @@ def find_corner_markers(image):
     }
     
     for corner_name, (x1, x2, y1, y2) in regions.items():
-        roi = binary[y1:y2, x1:x2]
-        contours, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        roi = gray[y1:y2, x1:x2]
+        thresh = cv2.adaptiveThreshold(roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                       cv2.THRESH_BINARY_INV, 11, 2)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         best_score = 0
         best_contour = None
         
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area < 50 or area > 2000:
+            if area < 20:
                 continue
-                
             x, y, w, h = cv2.boundingRect(contour)
             aspect_ratio = w / float(h) if h > 0 else 0
             
-            if 0.7 < aspect_ratio < 1.3:
-                perimeter = cv2.arcLength(contour, True)
-                approx = cv2.approxPolyDP(contour, 0.04 * perimeter, True)
-                
-                # Prefer 4-sided shapes
+            if 0.75 < aspect_ratio < 1.25:
                 squareness = 1.0 - abs(1.0 - aspect_ratio)
-                size_score = min(area / 200.0, 1.0)
-                shape_score = 1.2 if len(approx) == 4 else 1.0
-                score = squareness * size_score * shape_score
+                size_score = min(area / 150.0, 1.0)
+                score = squareness * size_score
                 
                 if score > best_score:
                     best_score = score
@@ -170,6 +159,34 @@ def find_corner_markers(image):
                 corners[corner_name] = (cx, cy)
     
     return corners
+
+def apply_perspective_transform(img, corners, config):
+    """Apply perspective transformation to dewarp OMR sheet - THIS IS THE FIX!"""
+    # Order corners: top-left, top-right, bottom-right, bottom-left
+    src_points = np.float32([
+        corners['top_left'],
+        corners['top_right'],
+        corners['bottom_right'],
+        corners['bottom_left']
+    ])
+    
+    # Destination points (perfect rectangle in template coordinates)
+    dst_points = np.float32([
+        [0, 0],
+        [config.TEMPLATE_WIDTH, 0],
+        [config.TEMPLATE_WIDTH, config.TEMPLATE_HEIGHT],
+        [0, config.TEMPLATE_HEIGHT]
+    ])
+    
+    # Calculate perspective transform matrix
+    matrix = cv2.getPerspectiveTransform(src_points, dst_points)
+    
+    # Apply transformation
+    warped = cv2.warpPerspective(img, matrix, 
+                                  (int(config.TEMPLATE_WIDTH), 
+                                   int(config.TEMPLATE_HEIGHT)))
+    
+    return warped, matrix
 
 def check_bubble_filled(gray_img, x, y, radius, threshold):
     """Check if bubble is filled"""
@@ -197,48 +214,39 @@ def check_bubble_filled(gray_img, x, y, radius, threshold):
         return False, 0.0
 
 def process_omr_sheet(img, config, threshold, answer_key):
-    """Enhanced OMR processing with perspective correction"""
+    """Generic OMR processing for both 50 and 100 MCQ - WITH PERSPECTIVE CORRECTION"""
     
-    # Find corners first
+    # Find corners
     corners = find_corner_markers(img)
     if len(corners) < 4:
         return {'error': f'Could not detect all 4 corners. Found {len(corners)}'}
     
-    # CRITICAL FIX: Apply perspective transform
-    src_points = np.float32([
-        corners['top_left'],
-        corners['top_right'],
-        corners['bottom_left'],
-        corners['bottom_right']
-    ])
+    # ✅ APPLY PERSPECTIVE CORRECTION - THIS FIXES THE ROTATION/ANGLE ISSUE!
+    warped_img, transform_matrix = apply_perspective_transform(img, corners, config)
+    warped_gray = cv2.cvtColor(warped_img, cv2.COLOR_BGR2GRAY)
+    result_img = warped_img.copy()
     
-    dst_points = np.float32([
-        [0, 0],
-        [config.TEMPLATE_WIDTH, 0],
-        [0, config.TEMPLATE_HEIGHT],
-        [config.TEMPLATE_WIDTH, config.TEMPLATE_HEIGHT]
-    ])
-    
-    matrix = cv2.getPerspectiveTransform(src_points, dst_points)
-    warped = cv2.warpPerspective(img, matrix, (int(config.TEMPLATE_WIDTH), int(config.TEMPLATE_HEIGHT)))
-    warped_gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-    
-    # Now work on straightened image
-    result_img = warped.copy()
+    # ✅ NOW ALL CALCULATIONS ARE IN TEMPLATE COORDINATES (no scaling needed)
+    scale_x = 1.0  # Already in template coordinates
+    scale_y = 1.0
     bubble_radius = config.BUBBLE_DIAMETER / 2
     
-    # Detect Roll Number
+    # ✅ Top-left corner is now at (0,0) in warped image
+    top_left = (0, 0)
+    
+    # Detect Roll Number (Support both 6 and 7 digits)
     roll_number = ""
     detected_digits = []
 
     for digit_col in range(config.ROLL_DIGITS):
         detected_digit = None
         max_fill = 0
-        best_x, best_y = 0, 0
         
         for row in range(config.ROLL_OPTIONS):
-            actual_x = config.ROLL_FROM_CORNER_X + (digit_col * config.ROLL_HORIZONTAL_SPACING)
-            actual_y = config.ROLL_FROM_CORNER_Y + (row * config.ROLL_VERTICAL_SPACING)
+            offset_x = config.ROLL_FROM_CORNER_X + (digit_col * config.ROLL_HORIZONTAL_SPACING)
+            offset_y = config.ROLL_FROM_CORNER_Y + (row * config.ROLL_VERTICAL_SPACING)
+            actual_x = offset_x
+            actual_y = offset_y
             
             is_filled, fill_pct = check_bubble_filled(warped_gray, actual_x, actual_y, bubble_radius, threshold)
             
@@ -255,6 +263,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
                 'y': best_y
             })
 
+    # Build roll number from detected digits (support 6 or 7 digits)
     if len(detected_digits) >= 6:
         for item in detected_digits:
             roll_number += item['digit']
@@ -265,11 +274,12 @@ def process_omr_sheet(img, config, threshold, answer_key):
     for digit_col in range(config.SERIAL_DIGITS):
         detected_digit = None
         max_fill = 0
-        best_x, best_y = 0, 0
         
         for row in range(config.SERIAL_OPTIONS):
-            actual_x = config.SERIAL_FROM_CORNER_X + (digit_col * config.SERIAL_HORIZONTAL_SPACING)
-            actual_y = config.SERIAL_FROM_CORNER_Y + (row * config.SERIAL_VERTICAL_SPACING)
+            offset_x = config.SERIAL_FROM_CORNER_X + (digit_col * config.SERIAL_HORIZONTAL_SPACING)
+            offset_y = config.SERIAL_FROM_CORNER_Y + (row * config.SERIAL_VERTICAL_SPACING)
+            actual_x = offset_x
+            actual_y = offset_y
             
             is_filled, fill_pct = check_bubble_filled(warped_gray, actual_x, actual_y, bubble_radius, threshold)
             
@@ -295,15 +305,16 @@ def process_omr_sheet(img, config, threshold, answer_key):
             base_x = base_x_offset
             base_y = base_y_offset + ((q_num - start_q) * v_spacing)
             
-            # Draw all option bubbles
+            # Draw all option bubbles with labels (A, B, C, D) - subtle with low opacity
             for opt_idx, option in enumerate(config.Q_OPTIONS):
                 actual_x = base_x + (opt_idx * opt_spacing)
                 actual_y = base_y
                 all_bubble_positions[option] = (int(actual_x), int(actual_y))
                 
+                # Draw subtle circle for all options (light gray, low opacity effect)
                 cv2.circle(result_img, (int(actual_x), int(actual_y)), int(bubble_radius), (200, 200, 200), 1)
                 
-                # Add option label
+                # Add option label (A, B, C, D) inside bubble - MUCH LARGER
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 font_scale = 0.65
                 font_thickness = 2
@@ -324,14 +335,18 @@ def process_omr_sheet(img, config, threshold, answer_key):
             
             if detected_option:
                 if correct_answer and detected_option == correct_answer:
+                    # Correct answer - fill with green
                     cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 255, 0), -1)
                     is_correct = True
                 else:
+                    # Wrong answer - fill with red
                     cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 0, 255), -1)
+                    # Show correct answer with green circle (not filled)
                     if correct_answer and correct_answer in all_bubble_positions:
                         correct_x, correct_y = all_bubble_positions[correct_answer]
                         cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 2)
             else:
+                # Skipped - show correct answer with simple green circle (not filled)
                 if correct_answer and correct_answer in all_bubble_positions:
                     correct_x, correct_y = all_bubble_positions[correct_answer]
                     cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 2)
@@ -361,18 +376,23 @@ def process_omr_sheet(img, config, threshold, answer_key):
         process_column(26, config.Q2_TOTAL, config.Q2_FROM_CORNER_X, config.Q2_FROM_CORNER_Y, 
                       config.Q2_VERTICAL_SPACING, config.Q2_OPTION_SPACING)
     
-    # Add stats header
+    # Add white background with border and stats at top
     img_height, img_width = result_img.shape[:2]
     header_height = 100
     final_img = np.ones((img_height + header_height, img_width, 3), dtype=np.uint8) * 255
     
+    # Copy OMR image below header
     final_img[header_height:, :] = result_img
+    
+    # Add border around entire image
     cv2.rectangle(final_img, (0, 0), (img_width - 1, img_height + header_height - 1), (0, 0, 0), 2)
     
+    # Calculate stats
     correct_count = len([a for a in answers if a['status'] == 'correct'])
     wrong_count = len([a for a in answers if a['status'] == 'wrong'])
     skipped_count = len([a for a in answers if a['status'] == 'skipped'])
     
+    # Modern styled stats boxes - centered with proper margins
     font = cv2.FONT_HERSHEY_SIMPLEX
     box_width = 180
     box_height = 60
@@ -384,24 +404,30 @@ def process_omr_sheet(img, config, threshold, answer_key):
     def draw_rounded_rect_filled(img, pt1, pt2, color, radius=15):
         x1, y1 = pt1
         x2, y2 = pt2
+        # Draw rectangles
         cv2.rectangle(img, (x1 + radius, y1), (x2 - radius, y2), color, -1)
         cv2.rectangle(img, (x1, y1 + radius), (x2, y2 - radius), color, -1)
+        # Draw circles at corners
         cv2.circle(img, (x1 + radius, y1 + radius), radius, color, -1)
         cv2.circle(img, (x2 - radius, y1 + radius), radius, color, -1)
         cv2.circle(img, (x1 + radius, y2 - radius), radius, color, -1)
         cv2.circle(img, (x2 - radius, y2 - radius), radius, color, -1)
     
+    # Correct (deep green)
     draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 128, 0), 15)
     cv2.putText(final_img, f'Correct:{correct_count}', (x_start + 20, y_top + 38), font, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
     
+    # Wrong (deep red)
     x_start += box_width + box_spacing
     draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 200), 15)
     cv2.putText(final_img, f'Wrong:{wrong_count}', (x_start + 25, y_top + 38), font, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
     
+    # Skipped (black)
     x_start += box_width + box_spacing
     draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 0), 15)
     cv2.putText(final_img, f'Skipped:{skipped_count}', (x_start + 15, y_top + 38), font, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
     
+    # Convert to base64 with maximum quality
     _, buffer = cv2.imencode('.jpg', final_img, [cv2.IMWRITE_JPEG_QUALITY, 100])
     img_base64 = base64.b64encode(buffer).decode('utf-8')
     
@@ -423,8 +449,8 @@ def process_omr_sheet(img, config, threshold, answer_key):
 def home():
     return '''
     <div style="text-align:center; font-family:Arial; padding:50px;">
-        <h1>OMR Checker API - Enhanced with Perspective Correction</h1>
-        <p style="font-size:1.2em; color:#667eea;">50 MCQ & 100 MCQ Support - 100% Accurate Detection</p>
+        <h1>OMR Checker API - Dual Format Support</h1>
+        <p style="font-size:1.2em; color:#667eea;">✅ WITH PERSPECTIVE CORRECTION - Handles Rotated/Angled Sheets!</p>
         <hr style="margin:30px 0;">
         <h3>Endpoints:</h3>
         <ul style="line-height:2;">
@@ -437,7 +463,7 @@ def home():
 
 @app.route('/test')
 def test():
-   return jsonify({'status': 'ok', 'message': 'OMR Checker API - Ready! (Enhanced Detection)'})
+   return jsonify({'status': 'ok', 'message': 'OMR Checker API - Ready! (With Perspective Correction)'})
 
 @app.route('/process-omr', methods=['POST'])
 def process_omr_auto():
@@ -469,6 +495,8 @@ def process_omr_50():
         
         threshold = float(request.form.get('threshold', OMRConfig50.FILL_THRESHOLD))
         answer_key_json = request.form.get('answer_key', '{}')
+        
+        import json
         answer_key = json.loads(answer_key_json)
         
         result = process_omr_sheet(img, OMRConfig50, threshold, answer_key)
@@ -495,6 +523,8 @@ def process_omr_100():
         
         threshold = float(request.form.get('threshold', OMRConfig100.FILL_THRESHOLD))
         answer_key_json = request.form.get('answer_key', '{}')
+        
+        import json
         answer_key = json.loads(answer_key_json)
         
         result = process_omr_sheet(img, OMRConfig100, threshold, answer_key)
