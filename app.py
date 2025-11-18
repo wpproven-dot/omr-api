@@ -160,30 +160,6 @@ def find_corner_markers(image):
     
     return corners
 
-# ✅ NEW FUNCTION - ADD THIS!
-def apply_perspective_transform(img, corners, config):
-    """Apply perspective transformation to straighten angled/rotated OMR sheets"""
-    src_points = np.float32([
-        corners['top_left'],
-        corners['top_right'],
-        corners['bottom_right'],
-        corners['bottom_left']
-    ])
-    
-    dst_points = np.float32([
-        [0, 0],
-        [config.TEMPLATE_WIDTH, 0],
-        [config.TEMPLATE_WIDTH, config.TEMPLATE_HEIGHT],
-        [0, config.TEMPLATE_HEIGHT]
-    ])
-    
-    matrix = cv2.getPerspectiveTransform(src_points, dst_points)
-    warped = cv2.warpPerspective(img, matrix, 
-                                  (int(config.TEMPLATE_WIDTH), 
-                                   int(config.TEMPLATE_HEIGHT)))
-    
-    return warped
-
 def check_bubble_filled(gray_img, x, y, radius, threshold):
     """Check if bubble is filled"""
     try:
@@ -211,22 +187,28 @@ def check_bubble_filled(gray_img, x, y, radius, threshold):
 
 def process_omr_sheet(img, config, threshold, answer_key):
     """Generic OMR processing for both 50 and 100 MCQ"""
+    result_img = img.copy()
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
     # Find corners
     corners = find_corner_markers(img)
     if len(corners) < 4:
         return {'error': f'Could not detect all 4 corners. Found {len(corners)}'}
     
-    # ✅ APPLY PERSPECTIVE TRANSFORMATION - THIS FIXES ANGLED SHEETS!
-    warped_img = apply_perspective_transform(img, corners, config)
-    result_img = warped_img.copy()
-    gray = cv2.cvtColor(warped_img, cv2.COLOR_BGR2GRAY)
+    top_left = corners['top_left']
+    top_right = corners['top_right']
+    bottom_left = corners['bottom_left']
     
-    # ✅ NOW USE DIRECT TEMPLATE COORDINATES (no scaling needed)
-    top_left = (0, 0)  # Top-left is now at origin
-    scale_x = 1.0
-    scale_y = 1.0
-    bubble_radius = config.BUBBLE_DIAMETER / 2
+    # Calculate scales
+    actual_width = top_right[0] - top_left[0]
+    actual_height = bottom_left[1] - top_left[1]
+    scale_x = actual_width / config.CORNER_HORIZONTAL_DIST
+    scale_y = actual_height / config.CORNER_VERTICAL_DIST
+    bubble_radius = (config.BUBBLE_DIAMETER / 2) * scale_x
+    
+    # Mark corners
+    for corner_name, (cx, cy) in corners.items():
+        cv2.circle(result_img, (cx, cy), 6, (255, 0, 255), -1)
     
     # Detect Roll Number (Support both 6 and 7 digits)
     roll_number = ""
@@ -239,8 +221,8 @@ def process_omr_sheet(img, config, threshold, answer_key):
         for row in range(config.ROLL_OPTIONS):
             offset_x = config.ROLL_FROM_CORNER_X + (digit_col * config.ROLL_HORIZONTAL_SPACING)
             offset_y = config.ROLL_FROM_CORNER_Y + (row * config.ROLL_VERTICAL_SPACING)
-            actual_x = offset_x
-            actual_y = offset_y
+            actual_x = top_left[0] + (offset_x * scale_x)
+            actual_y = top_left[1] + (offset_y * scale_y)
             
             is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
             
@@ -272,8 +254,8 @@ def process_omr_sheet(img, config, threshold, answer_key):
         for row in range(config.SERIAL_OPTIONS):
             offset_x = config.SERIAL_FROM_CORNER_X + (digit_col * config.SERIAL_HORIZONTAL_SPACING)
             offset_y = config.SERIAL_FROM_CORNER_Y + (row * config.SERIAL_VERTICAL_SPACING)
-            actual_x = offset_x
-            actual_y = offset_y
+            actual_x = top_left[0] + (offset_x * scale_x)
+            actual_y = top_left[1] + (offset_y * scale_y)
             
             is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
             
@@ -296,12 +278,12 @@ def process_omr_sheet(img, config, threshold, answer_key):
             best_x, best_y = 0, 0
             all_bubble_positions = {}
             
-            base_x = base_x_offset
-            base_y = base_y_offset + ((q_num - start_q) * v_spacing)
+            base_x = top_left[0] + (base_x_offset * scale_x)
+            base_y = top_left[1] + (base_y_offset * scale_y) + ((q_num - start_q) * v_spacing * scale_y)
             
             # Draw all option bubbles with labels (A, B, C, D) - subtle with low opacity
             for opt_idx, option in enumerate(config.Q_OPTIONS):
-                actual_x = base_x + (opt_idx * opt_spacing)
+                actual_x = base_x + (opt_idx * opt_spacing * scale_x)
                 actual_y = base_y
                 all_bubble_positions[option] = (int(actual_x), int(actual_y))
                 
@@ -444,7 +426,7 @@ def home():
     return '''
     <div style="text-align:center; font-family:Arial; padding:50px;">
         <h1>OMR Checker API - Dual Format Support</h1>
-        <p style="font-size:1.2em; color:#667eea;">✅ WITH PERSPECTIVE CORRECTION - Handles Rotated/Angled Sheets!</p>
+        <p style="font-size:1.2em; color:#667eea;">50 MCQ & 100 MCQ Support (6 or 7-Digit Roll Number)</p>
         <hr style="margin:30px 0;">
         <h3>Endpoints:</h3>
         <ul style="line-height:2;">
@@ -457,7 +439,7 @@ def home():
 
 @app.route('/test')
 def test():
-   return jsonify({'status': 'ok', 'message': 'OMR Checker API with Perspective Correction - Ready!'})
+   return jsonify({'status': 'ok', 'message': 'OMR Checker API - Ready! (6 or 7-Digit Roll)'})
 
 @app.route('/process-omr', methods=['POST'])
 def process_omr_auto():
