@@ -210,8 +210,8 @@ def apply_perspective_correction(image, corners, config):
     padding_x = config.CORNER_SQUARE_WIDTH * 2
     padding_y = config.CORNER_SQUARE_HEIGHT * 2
     
-    # Increase output resolution for better quality (2x scale)
-    scale_factor = 2.0
+    # Increase output resolution for ultra-crisp quality (3x scale)
+    scale_factor = 3.0
     output_width = int((actual_width + padding_x * 2) * scale_factor)
     output_height = int((actual_height + padding_y * 2) * scale_factor)
     
@@ -368,11 +368,23 @@ def process_omr_sheet(img, config, threshold, answer_key):
             base_x = top_left[0] + (base_x_offset * scale_x)
             base_y = top_left[1] + (base_y_offset * scale_y) + ((q_num - start_q) * v_spacing * scale_y)
             
-            # First pass: detect filled bubbles
+            # First pass: detect filled bubbles and draw all option circles with labels
             for opt_idx, option in enumerate(config.Q_OPTIONS):
                 actual_x = base_x + (opt_idx * opt_spacing * scale_x)
                 actual_y = base_y
                 all_bubble_positions[option] = (int(actual_x), int(actual_y))
+                
+                # Draw subtle circle for all options (light gray)
+                cv2.circle(result_img, (int(actual_x), int(actual_y)), int(bubble_radius), (200, 200, 200), 1)
+                
+                # Add option label (A, B, C, D) inside bubble
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.5
+                font_thickness = 1
+                text_size = cv2.getTextSize(option, font, font_scale, font_thickness)[0]
+                text_x = int(actual_x - text_size[0] / 2)
+                text_y = int(actual_y + text_size[1] / 2)
+                cv2.putText(result_img, option, (text_x, text_y), font, font_scale, (160, 160, 160), font_thickness, cv2.LINE_AA)
                 
                 is_filled, fill_pct = check_bubble_filled(gray, actual_x, actual_y, bubble_radius, threshold)
                 
@@ -461,19 +473,19 @@ def process_omr_sheet(img, config, threshold, answer_key):
         cv2.circle(img, (x1 + radius, y2 - radius), radius, color, -1)
         cv2.circle(img, (x2 - radius, y2 - radius), radius, color, -1)
     
-    # Correct (green) - 10px font
+    # Correct (green) - 13px font
     draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 180, 0), 10)
-    cv2.putText(final_img, f'Correct:{correct_count}', (x_start + 12, y_top + 28), font, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(final_img, f'Correct:{correct_count}', (x_start + 10, y_top + 29), font, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
     
-    # Wrong (red) - 10px font
+    # Wrong (red) - 13px font
     x_start += box_width + box_spacing
     draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 220), 10)
-    cv2.putText(final_img, f'Wrong:{wrong_count}', (x_start + 18, y_top + 28), font, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(final_img, f'Wrong:{wrong_count}', (x_start + 16, y_top + 29), font, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
     
-    # Skipped (black) - 10px font
+    # Skipped (black) - 13px font
     x_start += box_width + box_spacing
     draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 0), 10)
-    cv2.putText(final_img, f'Skipped:{skipped_count}', (x_start + 8, y_top + 28), font, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(final_img, f'Skipped:{skipped_count}', (x_start + 6, y_top + 29), font, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
     
     # Convert to base64 with PNG for lossless quality
     _, buffer = cv2.imencode('.png', final_img, [cv2.IMWRITE_PNG_COMPRESSION, 3])
