@@ -4,9 +4,14 @@ import cv2
 import numpy as np
 import os
 import base64
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 app = Flask(__name__)
 CORS(app)
+
+# Thread pool for parallel processing
+executor = ThreadPoolExecutor(max_workers=4)
 
 # =====================================================
 # OMR TEMPLATE - 100 MCQ (4 COLUMNS)
@@ -210,8 +215,8 @@ def apply_perspective_correction(image, corners, config):
     padding_x = config.CORNER_SQUARE_WIDTH * 2
     padding_y = config.CORNER_SQUARE_HEIGHT * 2
     
-    # Increase output resolution for ultra-crisp quality (3x scale)
-    scale_factor = 3.0
+    # Increase output resolution for ultra-crisp quality (2x scale - optimized for speed)
+    scale_factor = 2.0
     output_width = int((actual_width + padding_x * 2) * scale_factor)
     output_height = int((actual_height + padding_y * 2) * scale_factor)
     
@@ -487,8 +492,8 @@ def process_omr_sheet(img, config, threshold, answer_key):
     draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 0), 10)
     cv2.putText(final_img, f'Skipped:{skipped_count}', (x_start + 6, y_top + 30), font, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
     
-    # Convert to base64 with PNG for lossless quality
-    _, buffer = cv2.imencode('.png', final_img, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+    # Convert to base64 with optimized JPEG (faster than PNG, still high quality)
+    _, buffer = cv2.imencode('.jpg', final_img, [cv2.IMWRITE_JPEG_QUALITY, 95, cv2.IMWRITE_JPEG_OPTIMIZE, 1])
     img_base64 = base64.b64encode(buffer).decode('utf-8')
     
     return {
@@ -502,7 +507,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
         'marked': correct_count + wrong_count,
         'answers': answers,
         'threshold_used': threshold,
-        'result_image': f'data:image/png;base64,{img_base64}'
+        'result_image': f'data:image/jpeg;base64,{img_base64}'
     }
 
 @app.route('/')
@@ -544,10 +549,11 @@ def process_omr_50():
             return jsonify({'error': 'No file uploaded'}), 400
         
         file = request.files['file']
-        filepath = f'/tmp/{file.filename}'
-        file.save(filepath)
         
-        img = cv2.imread(filepath)
+        # Fast image loading - read directly from memory instead of disk
+        file_bytes = np.frombuffer(file.read(), np.uint8)
+        img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        
         if img is None:
             return jsonify({'error': 'Cannot read image file'}), 400
         
@@ -558,7 +564,6 @@ def process_omr_50():
         answer_key = json.loads(answer_key_json)
         
         result = process_omr_sheet(img, OMRConfig50, threshold, answer_key)
-        os.remove(filepath)
         
         return jsonify(result)
     except Exception as e:
@@ -571,10 +576,11 @@ def process_omr_100():
             return jsonify({'error': 'No file uploaded'}), 400
         
         file = request.files['file']
-        filepath = f'/tmp/{file.filename}'
-        file.save(filepath)
         
-        img = cv2.imread(filepath)
+        # Fast image loading - read directly from memory instead of disk
+        file_bytes = np.frombuffer(file.read(), np.uint8)
+        img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        
         if img is None:
             return jsonify({'error': 'Cannot read image file'}), 400
         
@@ -585,7 +591,6 @@ def process_omr_100():
         answer_key = json.loads(answer_key_json)
         
         result = process_omr_sheet(img, OMRConfig100, threshold, answer_key)
-        os.remove(filepath)
         
         return jsonify(result)
     except Exception as e:
