@@ -210,15 +210,17 @@ def apply_perspective_correction(image, corners, config):
     padding_x = config.CORNER_SQUARE_WIDTH * 2
     padding_y = config.CORNER_SQUARE_HEIGHT * 2
     
-    output_width = int(actual_width + padding_x * 2)
-    output_height = int(actual_height + padding_y * 2)
+    # Increase output resolution for better quality (2x scale)
+    scale_factor = 2.0
+    output_width = int((actual_width + padding_x * 2) * scale_factor)
+    output_height = int((actual_height + padding_y * 2) * scale_factor)
     
-    # Destination points (straightened sheet)
+    # Destination points (straightened sheet with scaling)
     dst = np.array([
-        [padding_x, padding_y],
-        [actual_width + padding_x, padding_y],
-        [actual_width + padding_x, actual_height + padding_y],
-        [padding_x, actual_height + padding_y]
+        [padding_x * scale_factor, padding_y * scale_factor],
+        [(actual_width + padding_x) * scale_factor, padding_y * scale_factor],
+        [(actual_width + padding_x) * scale_factor, (actual_height + padding_y) * scale_factor],
+        [padding_x * scale_factor, (actual_height + padding_y) * scale_factor]
     ], dtype="float32")
     
     # Calculate perspective transform matrix
@@ -227,12 +229,12 @@ def apply_perspective_correction(image, corners, config):
     # Apply transformation
     warped = cv2.warpPerspective(image, M, (output_width, output_height))
     
-    # Return corrected image and new corner positions
+    # Return corrected image and new corner positions (scaled)
     new_corners = {
-        'top_left': (int(padding_x), int(padding_y)),
-        'top_right': (int(actual_width + padding_x), int(padding_y)),
-        'bottom_left': (int(padding_x), int(actual_height + padding_y)),
-        'bottom_right': (int(actual_width + padding_x), int(actual_height + padding_y))
+        'top_left': (int(padding_x * scale_factor), int(padding_y * scale_factor)),
+        'top_right': (int((actual_width + padding_x) * scale_factor), int(padding_y * scale_factor)),
+        'bottom_left': (int(padding_x * scale_factor), int((actual_height + padding_y) * scale_factor)),
+        'bottom_right': (int((actual_width + padding_x) * scale_factor), int((actual_height + padding_y) * scale_factor))
     }
     
     return warped, new_corners
@@ -459,21 +461,22 @@ def process_omr_sheet(img, config, threshold, answer_key):
         cv2.circle(img, (x1 + radius, y2 - radius), radius, color, -1)
         cv2.circle(img, (x2 - radius, y2 - radius), radius, color, -1)
     
-    # Correct (green)
+    # Correct (green) - 10px font
     draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 180, 0), 10)
-    cv2.putText(final_img, f'Correct:{correct_count}', (x_start + 12, y_top + 30), font, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(final_img, f'Correct:{correct_count}', (x_start + 12, y_top + 28), font, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
     
-    # Wrong (red)
+    # Wrong (red) - 10px font
     x_start += box_width + box_spacing
     draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 220), 10)
-    cv2.putText(final_img, f'Wrong:{wrong_count}', (x_start + 18, y_top + 30), font, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(final_img, f'Wrong:{wrong_count}', (x_start + 18, y_top + 28), font, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
     
-    # Skipped (black)
+    # Skipped (black) - 10px font
     x_start += box_width + box_spacing
     draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 0), 10)
-    cv2.putText(final_img, f'Skipped:{skipped_count}', (x_start + 8, y_top + 30), font, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(final_img, f'Skipped:{skipped_count}', (x_start + 8, y_top + 28), font, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
     
-    _, buffer = cv2.imencode('.jpg', final_img, [cv2.IMWRITE_JPEG_QUALITY, 100])
+    # Convert to base64 with PNG for lossless quality
+    _, buffer = cv2.imencode('.png', final_img, [cv2.IMWRITE_PNG_COMPRESSION, 3])
     img_base64 = base64.b64encode(buffer).decode('utf-8')
     
     return {
@@ -487,7 +490,7 @@ def process_omr_sheet(img, config, threshold, answer_key):
         'marked': correct_count + wrong_count,
         'answers': answers,
         'threshold_used': threshold,
-        'result_image': f'data:image/jpeg;base64,{img_base64}'
+        'result_image': f'data:image/png;base64,{img_base64}'
     }
 
 @app.route('/')
@@ -579,4 +582,3 @@ def process_omr_100():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
-
