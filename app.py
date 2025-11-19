@@ -406,15 +406,15 @@ def process_omr_sheet(img, config, threshold, answer_key):
                     # Wrong - pure red filled circle
                     cv2.circle(result_img, (best_x, best_y), int(bubble_radius), (0, 0, 255), -1)
                     
-                    # Show correct answer with thin 1px green border circle
+                    # Show correct answer with deep green 1px border (0, 180, 0 = 50% deeper)
                     if correct_answer and correct_answer in all_bubble_positions:
                         correct_x, correct_y = all_bubble_positions[correct_answer]
-                        cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 1)
+                        cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 180, 0), 1)
             else:
-                # Skipped - show correct answer with thin 1px green border circle
+                # Skipped - show correct answer with deep green 1px border (0, 180, 0 = 50% deeper)
                 if correct_answer and correct_answer in all_bubble_positions:
                     correct_x, correct_y = all_bubble_positions[correct_answer]
-                    cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 255, 0), 1)
+                    cv2.circle(result_img, (correct_x, correct_y), int(bubble_radius), (0, 180, 0), 1)
             
             answers.append({
                 'question': q_num,
@@ -473,19 +473,19 @@ def process_omr_sheet(img, config, threshold, answer_key):
         cv2.circle(img, (x1 + radius, y2 - radius), radius, color, -1)
         cv2.circle(img, (x2 - radius, y2 - radius), radius, color, -1)
     
-    # Correct (green) - 13px font
+    # Correct (green) - 16px font (0.6 scale) with thickness 2 for super clean look
     draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 180, 0), 10)
-    cv2.putText(final_img, f'Correct:{correct_count}', (x_start + 10, y_top + 29), font, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(final_img, f'Correct:{correct_count}', (x_start + 10, y_top + 30), font, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
     
-    # Wrong (red) - 13px font
+    # Wrong (red) - 16px font (0.6 scale) with thickness 2 for super clean look
     x_start += box_width + box_spacing
     draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 220), 10)
-    cv2.putText(final_img, f'Wrong:{wrong_count}', (x_start + 16, y_top + 29), font, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(final_img, f'Wrong:{wrong_count}', (x_start + 16, y_top + 30), font, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
     
-    # Skipped (black) - 13px font
+    # Skipped (black) - 16px font (0.6 scale) with thickness 2 for super clean look
     x_start += box_width + box_spacing
     draw_rounded_rect_filled(final_img, (x_start, y_top), (x_start + box_width, y_top + box_height), (0, 0, 0), 10)
-    cv2.putText(final_img, f'Skipped:{skipped_count}', (x_start + 6, y_top + 29), font, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(final_img, f'Skipped:{skipped_count}', (x_start + 6, y_top + 30), font, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
     
     # Convert to base64 with PNG for lossless quality
     _, buffer = cv2.imencode('.png', final_img, [cv2.IMWRITE_PNG_COMPRESSION, 3])
